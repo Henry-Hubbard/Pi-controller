@@ -1,11 +1,13 @@
 # Builds the flashable controller image in the cloud and attaches it to a
-# GitHub Release. Run it from the Actions tab ("Run workflow"), or push a tag.
+# GitHub Release. Runs on every push to main that changes the OS, or from the
+# Actions tab ("Run workflow").
 name: Build controller image
 
 on:
   workflow_dispatch:
   push:
-    tags: ["v*"]
+    branches: [main]
+    paths: ["controller/**", "build/**", ".github/workflows/**", "VERSION"]
 
 permissions:
   contents: write
