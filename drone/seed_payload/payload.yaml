@@ -1,0 +1,36 @@
+# Seed payload actuators. After editing:  sudo systemctl restart seed-payload
+#
+# hold    = loaded / closed / attached   (where the servo sits on startup)
+# release = dropped / open / released
+#
+# type: servo  -> PCA9685 channel 0-15, angles 0-180.
+#                 Optional min_pw / max_pw pulse range in microseconds
+#                 (DEXI default 500-2500; most hobby servos want 1000-2000).
+# type: gpio   -> TCA9555 pin 0-4, 14 or 15, for a solenoid or relay.
+#                 release_high: true means the pin goes HIGH to release.
+#
+# The angles below are placeholders. Find each servo's real positions with the
+# DEXI Dash servo sliders first, then copy them in here.
+#
+# NOTE: this needs 8 outputs. If your hat only breaks out PCA9685 channels 0-4,
+# channels 5-7 need their own headers or a second board, or move some
+# actuators to GPIO (type: gpio).
+
+actuators:
+  # Seeding: one servo per bar. Labels and colors show on the controller.
+  row_1: { label: Red,   type: servo, channel: 0, hold: 90, release: 0 }
+  row_2: { label: Green, type: servo, channel: 1, hold: 90, release: 0 }
+  row_3: { label: Blue,  type: servo, channel: 2, hold: 90, release: 0 }
+  rack:  { label: Seeding rack, type: servo, channel: 3, hold: 90, release: 0 }
+
+  # Can grippers: hold = closed on the can, release = open (drops it).
+  can_1: { label: Can 1, type: servo, channel: 4, hold: 30, release: 120 }
+  can_2: { label: Can 2, type: servo, channel: 5, hold: 30, release: 120 }
+  can_3: { label: Can 3, type: servo, channel: 6, hold: 30, release: 120 }
+  can_4: { label: Can 4, type: servo, channel: 7, hold: 30, release: 120 }
+
+# What happens when this service starts (drone boot, or a restart in the air):
+#   hold = move everything to its hold position. Keeps the rack latched and any
+#          cans held if the drone reboots mid-flight.
+#   none = leave every output alone until the controller sends a command.
+startup: hold

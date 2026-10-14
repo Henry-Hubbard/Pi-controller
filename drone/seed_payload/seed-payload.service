@@ -1,0 +1,19 @@
+[Unit]
+Description=Seed payload (seed rows, rack, can grippers) for the Seed Drop Controller
+After=dexi.service
+Wants=dexi.service
+
+[Service]
+Type=simple
+# Same user as dexi.service so DDS shared memory between the nodes works.
+User=root
+Environment="HOME=/home/dexi"
+Environment="PYTHONUNBUFFERED=1"
+ExecStart=/bin/bash -c 'source /home/dexi/ros2_jazzy/install/setup.bash && source /home/dexi/dexi_ws/install/setup.bash && exec python3 /home/dexi/seed_payload/payload_node.py --ros-args -p config_file:=/home/dexi/seed_payload/payload.yaml'
+Restart=always
+RestartSec=3
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

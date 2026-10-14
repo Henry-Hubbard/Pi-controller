@@ -1,0 +1,5 @@
+# Session for the kiosk user. No password prompt: systemd starts the session directly.
+auth     required pam_unix.so nullok
+account  required pam_unix.so
+session  required pam_unix.so
+session  required pam_systemd.so

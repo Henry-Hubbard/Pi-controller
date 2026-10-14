@@ -1,0 +1,33 @@
+#!/bin/sh
+# Started by cage (seedctl-kiosk.service). Rotates the screen if asked, then
+# runs Chromium full screen on the controller app. When Chromium exits, cage
+# exits and systemd starts it again.
+
+[ -f /run/seedctl/env ] && . /run/seedctl/env
+
+if [ -n "$ROTATION" ] && [ "$ROTATION" != 0 ] && command -v wlr-randr >/dev/null; then
+  OUT=$(wlr-randr | awk '/^[^ ]/{print $1; exit}')
+  [ -n "$OUT" ] && wlr-randr --output "$OUT" --transform "$ROTATION"
+fi
+
+BROWSER=$(command -v chromium || command -v chromium-browser)
+PROFILE=/run/seedctl/chromium
+mkdir -p "$PROFILE"
+
+exec "$BROWSER" \
+  --kiosk \
+  --ozone-platform=wayland \
+  --user-data-dir="$PROFILE" \
+  --disk-cache-dir=/run/seedctl/cache \
+  --no-first-run \
+  --no-default-browser-check \
+  --noerrdialogs \
+  --disable-infobars \
+  --disable-session-crashed-bubble \
+  --disable-features=Translate,TranslateUI,MediaRouter \
+  --overscroll-history-navigation=0 \
+  --disable-pinch \
+  --password-store=basic \
+  --check-for-update-interval=31536000 \
+  --allow-file-access-from-files \
+  "file:///opt/seedctl/app/index.html?kiosk"

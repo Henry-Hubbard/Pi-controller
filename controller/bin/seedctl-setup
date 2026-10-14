@@ -1,0 +1,143 @@
+#!/usr/bin/env python3
+"""Runs once at boot, before the network and the screen start.
+
+Reads seedctl.conf from the SD card's boot partition and turns it into:
+  /run/seedctl/config.js     settings for the controller app
+  /run/seedctl/env           settings for the kiosk launcher (rotation)
+  a NetworkManager profile   so the controller joins the drone's hotspot
+"""
+import json
+import os
+import pwd
+import re
+import subprocess
+import sys
+
+BOOT = "/boot/firmware" if os.path.isdir("/boot/firmware") else "/boot"
+CONF = os.path.join(BOOT, "seedctl.conf")
+RUN = "/run/seedctl"
+NM_FILE = "/etc/NetworkManager/system-connections/seedctl-drone.nmconnection"
+HEX = re.compile(r"^#[0-9A-Fa-f]{6}$")
+
+DEFAULTS = {
+    "DRONE_SSID": "",
+    "DRONE_PASSWORD": "droneblocks",
+    "WIFI_COUNTRY": "US",
+    "DRONE_IP": "192.168.4.1",
+    "DRONE_NAME": "",
+    "DASHBOARD_URL": "http://{ip}:8000/#embed",
+    "ROW_COLORS": "#C2322A,#2F8A44,#2D5DB0",
+    "DISPLAY_ROTATION": "0",
+}
+
+
+def log(msg):
+    print("seedctl-setup: " + msg, flush=True)
+
+
+def read_conf():
+    vals = dict(DEFAULTS)
+    try:
+        with open(CONF, encoding="utf-8", errors="replace") as f:
+            for raw in f:
+                line = raw.strip().lstrip("\ufeff")
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                k, v = line.split("=", 1)
+                k, v = k.strip().upper(), v.strip()
+                if len(v) >= 2 and v[0] == v[-1] and v[0] in "\"'":
+                    v = v[1:-1]
+                if k in vals:
+                    vals[k] = v
+    except FileNotFoundError:
+        log(f"{CONF} not found, using defaults")
+    return vals
+
+
+def write_if_changed(path, text, mode=0o644):
+    try:
+        with open(path) as f:
+            if f.read() == text:
+                return False
+    except FileNotFoundError:
+        pass
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w") as f:
+        f.write(text)
+    os.chmod(path, mode)
+    return True
+
+
+def nm_escape(s):
+    # NetworkManager keyfiles are GKeyFile: escape backslash and line breaks.
+    return s.replace("\\", "\\\\").replace("\n", "\\n").replace("\r", "\\r")
+
+
+def main():
+    c = read_conf()
+    ip = c["DRONE_IP"] or "192.168.4.1"
+    if not re.match(r"^[A-Za-z0-9.\-]+$", ip):
+        log(f"DRONE_IP {ip!r} is not an address, using 192.168.4.1")
+        ip = "192.168.4.1"
+
+    rot = c["DISPLAY_ROTATION"].strip()
+    if rot not in ("0", "90", "180", "270"):
+        log(f"DISPLAY_ROTATION {rot!r} must be 0, 90, 180 or 270; using 0")
+        rot = "0"
+
+    colors = [x.strip() for x in c["ROW_COLORS"].split(",")]
+    defaults = DEFAULTS["ROW_COLORS"].split(",")
+    colors = [colors[i] if i < len(colors) and HEX.match(colors[i]) else defaults[i] for i in range(3)]
+
+    app = {
+        "droneHost": ip,
+        "droneName": c["DRONE_NAME"],
+        "dashboardUrl": c["DASHBOARD_URL"].replace("{ip}", ip),
+        "rowColors": colors,
+    }
+    os.makedirs(RUN, exist_ok=True)
+    write_if_changed(os.path.join(RUN, "config.js"), "window.SEEDCTL = " + json.dumps(app, indent=2) + ";\n")
+    write_if_changed(os.path.join(RUN, "env"), f"ROTATION={rot}\n")
+    try:
+        u = pwd.getpwnam("seedctl")
+        os.chown(RUN, u.pw_uid, u.pw_gid)
+    except KeyError:
+        pass
+
+    # Wi-Fi country (Raspberry Pi OS keeps Wi-Fi blocked until one is set)
+    country = c["WIFI_COUNTRY"].upper()
+    if re.match(r"^[A-Z]{2}$", country):
+        if subprocess.call(["raspi-config", "nonint", "do_wifi_country", country],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) != 0:
+            subprocess.call(["iw", "reg", "set", country], stderr=subprocess.DEVNULL)
+    subprocess.call(["rfkill", "unblock", "wifi"], stderr=subprocess.DEVNULL)
+
+    # Wi-Fi profile for the drone's hotspot
+    ssid = c["DRONE_SSID"]
+    if not ssid or ssid == "dexi-XXXX":
+        log("DRONE_SSID is not set in seedctl.conf; not joining any drone network")
+        if os.path.exists(NM_FILE):
+            os.remove(NM_FILE)
+    else:
+        psk = c["DRONE_PASSWORD"]
+        sec = (f"[wifi-security]\nkey-mgmt=wpa-psk\npsk={nm_escape(psk)}\n\n" if psk else "")
+        text = (
+            "[connection]\nid=seedctl-drone\ntype=wifi\nautoconnect=true\nautoconnect-priority=100\n"
+            "autoconnect-retries=0\n\n"
+            f"[wifi]\nmode=infrastructure\nssid={nm_escape(ssid)}\n\n"
+            + sec +
+            "[ipv4]\nmethod=auto\n\n[ipv6]\nmethod=ignore\n"
+        )
+        if write_if_changed(NM_FILE, text, 0o600):
+            log(f"Wi-Fi profile for {ssid} written")
+            # Only needed if NetworkManager is already up (normally we run before it).
+            subprocess.call(["nmcli", "connection", "reload"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    log(f"drone {ip}, dashboard {app['dashboardUrl']}, rotation {rot}")
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception as e:  # never block boot
+        log(f"error: {e}")
+        sys.exit(0)

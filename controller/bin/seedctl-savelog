@@ -1,0 +1,22 @@
+#!/bin/sh
+# Runs (as root) whenever the screen app stops. Copies the recent log to the SD
+# card's boot partition, so it can be read from any laptop as seedctl-log.txt.
+BOOT=/boot/firmware; [ -d "$BOOT" ] || BOOT=/boot
+{
+  echo "Seed Drop Controller log, $(date)"
+  echo "Exit: ${SERVICE_RESULT:-?} ${EXIT_CODE:-} ${EXIT_STATUS:-}"
+  echo
+  echo "== screen app (seedctl-kiosk) =="
+  journalctl -u seedctl-kiosk -b --no-pager -n 120 2>&1
+  echo
+  echo "== settings (seedctl-setup) =="
+  journalctl -u seedctl-setup -b --no-pager -n 30 2>&1
+  echo
+  echo "== display devices =="
+  ls -l /dev/dri 2>&1
+  ls /sys/class/drm 2>&1
+  echo
+  echo "== power =="
+  vcgencmd get_throttled 2>&1
+} > "$BOOT/seedctl-log.txt" 2>&1
+sync

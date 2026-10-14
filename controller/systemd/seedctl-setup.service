@@ -1,0 +1,14 @@
+[Unit]
+Description=Seed Drop Controller settings from the SD card
+DefaultDependencies=no
+After=local-fs.target
+Before=NetworkManager.service seedctl-kiosk.service
+Wants=local-fs.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/python3 /opt/seedctl/bin/seedctl-setup
+
+[Install]
+WantedBy=multi-user.target

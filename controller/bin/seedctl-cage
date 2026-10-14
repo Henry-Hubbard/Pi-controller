@@ -1,0 +1,15 @@
+#!/bin/sh
+# Starts cage on the GPU that actually drives a screen.
+# A Pi 5 has two DRM devices (the 3D engine, with no outputs, and the display
+# controller); pointing wlroots at the one with connectors avoids it picking
+# the wrong one and exiting straight away.
+for card in /sys/class/drm/card[0-9]*; do
+  case "$card" in *-*) continue ;; esac
+  if ls -d "$card"-* >/dev/null 2>&1; then
+    WLR_DRM_DEVICES="/dev/dri/$(basename "$card")"
+    export WLR_DRM_DEVICES
+    break
+  fi
+done
+echo "seedctl: display device ${WLR_DRM_DEVICES:-auto}"
+exec /usr/bin/cage -s -- /opt/seedctl/bin/seedctl-kiosk

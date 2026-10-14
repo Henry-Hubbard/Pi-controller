@@ -1,0 +1,47 @@
+# Builds the flashable controller image in the cloud and attaches it to a
+# GitHub Release. Run it from the Actions tab ("Run workflow"), or push a tag.
+name: Build controller image
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q qemu-user-static binfmt-support parted xz-utils e2fsprogs openssl
+
+      - name: Build image (Raspberry Pi OS Lite + controller)
+        run: sudo ./build/build-image.sh
+
+      - name: Compress
+        run: |
+          V=$(tr -d '[:space:]' < VERSION)
+          sudo chown -R "$USER" out
+          xz -T0 -6 -c out/seedctl-os.img > "out/seedctl-os-$V.img.xz"
+          rm out/seedctl-os.img
+          (cd out && sha256sum seedctl-os-*.img.xz > SHA256SUMS)
+          ls -lh out
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          V=$(tr -d '[:space:]' < VERSION)
+          TAG="image-$V-${{ github.run_number }}"
+          gh release create "$TAG" out/seedctl-os-*.img.xz out/SHA256SUMS \
+            --title "Seed Drop Controller $V (build ${{ github.run_number }})" \
+            --notes "Flash with Raspberry Pi Imager: Choose OS → Use custom → seedctl-os-$V.img.xz.
+          Then, on the card's bootfs drive, open seedctl.conf and set DRONE_SSID to your drone's Wi-Fi name.
+          Admin login (keyboard or SSH): seedadmin / seedctl. Change it with passwd."

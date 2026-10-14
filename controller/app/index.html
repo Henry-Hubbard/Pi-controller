@@ -1,0 +1,500 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Seed Drop Controller</title>
+<!-- Settings come from the SD card (seedctl.conf), written here at boot. -->
+<script src="config.js"></script>
+<style>
+@font-face { font-family: "Barlow Semi Condensed"; font-weight: 500; src: url("fonts/barlow-semi-condensed-latin-500-normal.woff2") format("woff2"); }
+@font-face { font-family: "Barlow Semi Condensed"; font-weight: 600; src: url("fonts/barlow-semi-condensed-latin-600-normal.woff2") format("woff2"); }
+@font-face { font-family: "Barlow Semi Condensed"; font-weight: 700; src: url("fonts/barlow-semi-condensed-latin-700-normal.woff2") format("woff2"); }
+@font-face { font-family: "IBM Plex Mono"; font-weight: 400; src: url("fonts/ibm-plex-mono-latin-400-normal.woff2") format("woff2"); }
+@font-face { font-family: "IBM Plex Mono"; font-weight: 500; src: url("fonts/ibm-plex-mono-latin-500-normal.woff2") format("woff2"); }
+
+/* Field console, light for sunlight. Designed at 1280x720 and scaled to fit any landscape screen. */
+:root {
+  --ground: #E9ECE6; --panel: #FFFFFF; --ink: #161A17; --ink-2: #1E2620; --muted: #5A635C; --muted-2: #4A534C;
+  --line: #CBD2CA; --line-2: #B9C1B8; --sunken: #DCE1DA;
+  --action: #B93B09; --action-soft: #F9DDCF; --action-ink: #8F2D06;
+  --ok: #2B7A3D; --ok-soft: #DCEBDD; --ok-ink: #1F5E2D;
+  --bad: #B3261E; --bad-soft: #F6D9D6;
+  --focus: #2D5DB0;
+  --f-ui: "Barlow Semi Condensed", "Arial Narrow", sans-serif;
+  --f-mono: "IBM Plex Mono", ui-monospace, monospace;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { margin: 0; height: 100%; background: var(--ground); overflow: hidden; }
+body { font-family: var(--f-ui); color: var(--ink); -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
+body.kiosk, body.kiosk * { cursor: none !important; }
+button { font: inherit; color: inherit; }
+#stage { position: absolute; left: 0; top: 0; width: 1280px; height: 720px; transform-origin: 0 0; padding: 16px; display: flex; flex-direction: column; gap: 16px; }
+
+/* header */
+header { height: 56px; flex: none; display: flex; align-items: center; gap: 16px; padding: 0 16px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; }
+.title { font-size: 22px; font-weight: 700; line-height: 1; }
+.sub { font: 400 12px var(--f-mono); color: var(--muted); margin-top: 2px; }
+nav.steps { flex: 1; display: flex; align-items: center; justify-content: center; gap: 6px; }
+.step { display: flex; align-items: center; gap: 8px; height: 36px; padding: 0 14px 0 6px; border-radius: 18px; border: 1px solid var(--line); color: var(--muted); font-size: 14px; font-weight: 600; letter-spacing: .04em; white-space: nowrap; }
+.step .num { width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; background: var(--sunken); color: var(--muted-2); font: 500 12px var(--f-mono); }
+.step.done { color: var(--ok-ink); border-color: #BFD8C2; background: #EEF5EE; }
+.step.done .num { background: var(--ok); color: #FFF; }
+.step.current { color: var(--ink); border-color: var(--ink); background: var(--panel); }
+.step.current .num { background: var(--ink); color: #FFF; }
+.step-sep { width: 14px; height: 2px; background: var(--line); }
+
+.pill { display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 10px; border-radius: 12px; font-size: 13px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; white-space: nowrap; }
+.pill .d { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+.pill-ok { background: var(--ok-soft); color: var(--ok-ink); }
+.pill-action { background: var(--action-soft); color: var(--action-ink); }
+.pill-muted { background: #E3E7E1; color: var(--muted-2); }
+.pill-ink { background: var(--ink-2); color: #FFF; }
+.pill-bad { background: var(--bad-soft); color: var(--bad); }
+
+main { flex: 1; min-height: 0; display: flex; gap: 16px; }
+.left { width: 740px; flex: none; display: flex; flex-direction: column; gap: 16px; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; display: flex; flex-direction: column; gap: 12px; position: relative; }
+.card-head { display: flex; align-items: baseline; gap: 12px; }
+.card-head h2 { margin: 0; font-size: 20px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
+.card-head .hint { font-size: 15px; color: var(--muted); flex: 1; }
+
+/* switches */
+.sw { display: flex; align-items: center; gap: 6px; width: 100%; height: 56px; padding: 5px; border-radius: 28px; border: 2px solid transparent; cursor: pointer; font-weight: 700; font-size: 16px; letter-spacing: .08em; text-transform: uppercase; transition: background-color .15s, border-color .15s; position: relative; }
+.sw .knob { flex: none; width: 42px; height: 42px; border-radius: 50%; background: #FFF; box-shadow: 0 1px 3px rgba(0,0,0,.35); display: grid; place-items: center; }
+.sw .lab { flex: 1; text-align: center; }
+.sw.on { flex-direction: row-reverse; }
+.sw.t-off { background: var(--sunken); border-color: var(--line-2); color: var(--muted-2); }
+.sw.t-ink { background: var(--ink-2); border-color: var(--ink-2); color: #FFF; }
+.sw.t-action { background: var(--action); border-color: var(--action); color: #FFF; }
+.sw:disabled { cursor: not-allowed; opacity: .45; }
+.sw:focus-visible, .icon-btn:focus-visible, .sheet button:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+.sw.pending .knob::after { content: ""; width: 18px; height: 18px; border-radius: 50%; border: 3px solid #C9D0C7; border-top-color: var(--ink); animation: spin .8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* seed rows */
+.rows { display: flex; flex-direction: column; gap: 10px; }
+.row { height: 48px; display: flex; align-items: center; gap: 12px; }
+.row .name { width: 70px; flex: none; display: flex; align-items: center; gap: 8px; font-size: 17px; font-weight: 700; }
+.row .sw-wrap { width: 160px; flex: none; }
+.swatch { width: 14px; height: 14px; border-radius: 3px; flex: none; }
+.servo { position: relative; width: 40px; height: 40px; border-radius: 50%; background: var(--ink-2); flex: none; }
+.servo .arm { position: absolute; left: 18px; top: 4px; width: 4px; height: 18px; border-radius: 2px; transform-origin: 2px 16px; transition: transform .25s; }
+.servo.flicked .arm { transform: rotate(90deg); }
+.servo .hub { position: absolute; left: 15px; top: 15px; width: 10px; height: 10px; border-radius: 50%; background: #FFF; }
+.trough { flex: 1; min-width: 0; height: 44px; border-radius: 8px; display: flex; align-items: center; justify-content: center; border: 2px solid; background-color: #F4F6F2; background-repeat: repeat-x; background-size: 24px 100%; background-position: 6px 0; font: 500 13px var(--f-mono); color: var(--muted); }
+.trough.empty { border: 2px dashed var(--line-2); background-image: none !important; background-color: #F1F3EF; }
+.rule { height: 1px; background: var(--line); flex: none; }
+.rack { display: flex; align-items: center; gap: 12px; }
+.rack .txt { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.rack .txt b { font-size: 18px; }
+.rack .txt span { font-size: 14px; color: var(--muted); }
+.rack .sw-wrap { width: 190px; flex: none; }
+
+/* cans */
+.cans-card { height: 300px; flex: none; }
+.cans { flex: 1; display: flex; gap: 10px; min-height: 0; }
+.master { width: 132px; flex: none; padding-right: 12px; border-right: 1px solid var(--line); display: flex; flex-direction: column; gap: 6px; }
+.master .k { font-size: 13px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+.master .v { font-size: 24px; font-weight: 700; line-height: 1.05; }
+.master .d { font-size: 14px; line-height: 1.3; color: var(--muted); flex: 1; }
+.can-col { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: center; gap: 8px; }
+.can-name { display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%; }
+.can-name b { font-size: 17px; }
+.grip { position: relative; width: 110px; height: 124px; flex: none; }
+.mount { position: absolute; left: 15px; top: 0; width: 80px; height: 12px; border-radius: 4px; background: var(--ink-2); z-index: 3; }
+.claw { position: absolute; top: 8px; width: 10px; height: 72px; border-radius: 0 0 4px 4px; background: #3A443C; transform-origin: 50% 0; transition: transform .25s; z-index: 2; }
+.claw.l { left: 20px; } .claw.r { right: 20px; }
+.claw .foot { position: absolute; bottom: 0; width: 15px; height: 8px; border-radius: 2px; background: #3A443C; }
+.claw.l .foot { left: 3px; } .claw.r .foot { right: 3px; }
+.grip.open .claw.l { transform: rotate(24deg); } .grip.open .claw.r { transform: rotate(-24deg); }
+.can, .ghost { position: absolute; left: 27px; top: 18px; width: 56px; height: 86px; border-radius: 7px; }
+.can { background: linear-gradient(90deg, #76857B 0%, #CDD5CF 42%, #8C998F 100%); z-index: 1; overflow: hidden; }
+.can .lid { position: absolute; left: 0; right: 0; top: 0; height: 9px; background: #AEB9B0; border-bottom: 1px solid #76857B; }
+.can .band { position: absolute; left: 0; right: 0; top: 34px; height: 24px; background: var(--ok); color: #FFF; display: grid; place-items: center; font-weight: 700; font-size: 15px; }
+.ghost { border: 2px dashed var(--line-2); }
+
+/* offline shade over the controls */
+.shade { position: absolute; inset: 0; border-radius: 10px; background: rgba(233,236,230,.72); display: none; align-items: center; justify-content: center; z-index: 5; }
+.shade span { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px 16px; font-size: 16px; font-weight: 600; }
+body.offline .shade { display: flex; }
+
+/* dashboard webview */
+.web { flex: 1; min-width: 0; display: flex; flex-direction: column; border: 1px solid #9AA59C; border-radius: 10px; overflow: hidden; background: #0F1514; position: relative; }
+.web.full { position: absolute; inset: 16px; z-index: 20; }
+.chrome { height: 44px; flex: none; display: flex; align-items: center; gap: 4px; padding: 0 8px; background: var(--sunken); border-bottom: 1px solid var(--line-2); }
+.icon-btn { width: 40px; height: 36px; display: grid; place-items: center; border: 0; border-radius: 6px; background: transparent; color: #3A443C; cursor: pointer; }
+.icon-btn:active { background: #C9D0C7; }
+.url { flex: 1; min-width: 0; height: 30px; display: flex; align-items: center; gap: 8px; padding: 0 12px; border-radius: 15px; background: #FFF; font: 400 13px var(--f-mono); color: #3A443C; white-space: nowrap; overflow: hidden; }
+.url .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--line-2); flex: none; }
+.url .dot.ok { background: var(--ok); }
+.web-body { flex: 1; min-height: 0; position: relative; }
+.web-body iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; background: #0F1514; }
+.web-msg { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; color: #C9D4D3; text-align: center; padding: 24px; background: #0F1514; }
+.web-msg b { font-size: 20px; color: #E1EAE9; }
+.web-msg span { font: 400 13px var(--f-mono); }
+
+/* demo camera (only in ?demo) */
+.demo-cam { position: absolute; inset: 0; padding: 12px; display: flex; flex-direction: column; gap: 10px; color: #E1EAE9; }
+.demo-cam .cam { position: relative; height: 312px; flex: none; border-radius: 6px; overflow: hidden; background: repeating-linear-gradient(104deg, #5D7A39 0 16px, #6E5435 16px 34px); }
+.demo-cam .tiles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.demo-cam .tile { background: #18201F; border-radius: 6px; padding: 8px 10px; display: flex; flex-direction: column; gap: 3px; }
+.demo-cam .tile span { font-size: 11px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: #8B9C9B; }
+.demo-cam .tile b { font: 500 19px var(--f-mono); }
+.hud { position: absolute; background: rgba(5,8,8,.7); padding: 4px 6px; border-radius: 3px; font: 500 11px var(--f-mono); color: #E1EAE9; }
+
+/* confirm sheet + toast */
+.sheet-bg { position: absolute; inset: 0; background: rgba(22,26,23,.45); display: flex; align-items: center; justify-content: center; z-index: 30; }
+.sheet { width: 520px; background: var(--panel); border-radius: 12px; padding: 24px; display: flex; flex-direction: column; gap: 14px; box-shadow: 0 12px 40px rgba(0,0,0,.3); }
+.sheet h3 { margin: 0; font-size: 26px; line-height: 1.1; }
+.sheet p { margin: 0; font-size: 17px; color: var(--muted); line-height: 1.35; }
+.sheet .acts { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 6px; }
+.sheet button { height: 64px; border-radius: 10px; font-size: 19px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; cursor: pointer; }
+.sheet .cancel { background: var(--panel); border: 2px solid var(--line-2); }
+.sheet .go { background: var(--action); border: 2px solid var(--action); color: #FFF; }
+.toast { position: absolute; left: 50%; bottom: 28px; transform: translateX(-50%); max-width: 900px; background: var(--ink); color: #FFF; padding: 12px 18px; border-radius: 8px; font-size: 16px; z-index: 40; }
+.toast.bad { background: var(--bad); }
+@media (prefers-reduced-motion: reduce) { .claw, .servo .arm, .sw { transition: none; } }
+</style>
+</head>
+<body>
+<div id="stage">
+  <header>
+    <div style="flex: none">
+      <div class="title">Seed Drop Controller</div>
+      <div class="sub" id="droneLine">drone —</div>
+    </div>
+    <nav class="steps" id="steps" aria-label="Mission steps"></nav>
+    <span class="pill pill-muted" id="conn"><span class="d"></span><span id="connTxt">Searching</span></span>
+  </header>
+
+  <main>
+    <div class="left">
+      <section class="card" style="flex: 1; min-height: 0" aria-labelledby="seed-h">
+        <div class="card-head">
+          <h2 id="seed-h">Seed rows</h2>
+          <span class="hint">Each switch flicks one servo and drops a whole row.</span>
+          <span class="pill pill-muted" id="rowsPill">—</span>
+        </div>
+        <div class="rows" id="rows"></div>
+        <div class="rule"></div>
+        <div class="rack">
+          <div class="txt"><b id="rackName">Seeding rack</b><span>Drops the whole mechanism. Do this last.</span></div>
+          <span class="pill pill-muted" id="rackChip">—</span>
+          <div class="sw-wrap"><button type="button" class="sw t-off" id="rackSw" aria-label="Seeding rack: attached or released"><span class="knob"></span><span class="lab">Attached</span></button></div>
+        </div>
+        <div class="shade"><span id="shadeTxt">Not connected to the drone</span></div>
+      </section>
+
+      <section class="card cans-card" aria-labelledby="cans-h">
+        <div class="card-head">
+          <h2 id="cans-h">Cans</h2>
+          <span class="hint">After seeding, land and grab all four, then drop each one at its spot.</span>
+          <span class="pill pill-muted" id="cansPill">—</span>
+        </div>
+        <div class="cans" id="cans">
+          <div class="master">
+            <div class="k">All cans</div>
+            <div class="v" id="masterV">—</div>
+            <div class="d" id="masterD"></div>
+            <button type="button" class="sw t-off" id="masterSw" aria-label="All cans: grab or open"><span class="knob"></span><span class="lab">Open</span></button>
+          </div>
+        </div>
+        <div class="shade"><span>Not connected to the drone</span></div>
+      </section>
+    </div>
+
+    <section class="web" id="web" aria-label="Drone dashboard">
+      <div class="chrome">
+        <button type="button" class="icon-btn" id="webReload" aria-label="Reload dashboard"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/></svg></button>
+        <div class="url"><span class="dot" id="webDot"></span><span id="webUrl">—</span></div>
+        <button type="button" class="icon-btn" id="webFull" aria-label="Full screen dashboard"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
+      </div>
+      <div class="web-body" id="webBody">
+        <iframe id="webFrame" title="Drone dashboard" hidden></iframe>
+        <div class="web-msg" id="webMsg"><b>Looking for the drone dashboard</b><span id="webMsgUrl"></span><span>Retrying every few seconds</span></div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<script>
+(() => {
+'use strict';
+const Q = new URLSearchParams(location.search);
+const DEMO = Q.has('demo') || !!window.SEEDCTL_DEMO;
+if (Q.has('kiosk')) document.body.classList.add('kiosk');
+document.addEventListener('contextmenu', (e) => e.preventDefault());
+
+const C = Object.assign({
+  droneHost: '192.168.4.1',
+  droneName: '',
+  dashboardUrl: 'http://192.168.4.1:8000/#embed',
+  rowColors: ['#C2322A', '#2F8A44', '#2D5DB0'],
+}, window.SEEDCTL || {});
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+// ---------- fit the 1280x720 stage to whatever screen this is ----------
+function fit() {
+  const s = Math.min(innerWidth / 1280, innerHeight / 720);
+  const st = $('stage');
+  st.style.transform = 'scale(' + s + ')';
+  st.style.left = Math.round((innerWidth - 1280 * s) / 2) + 'px';
+  st.style.top = Math.round((innerHeight - 720 * s) / 2) + 'px';
+}
+addEventListener('resize', fit); fit();
+
+// ---------- rosbridge ----------
+class Rosbridge {
+  constructor(url) { this.url = url; this.subs = new Map(); this.pending = new Map(); this.n = 0; this.up = false; this.onstatus = () => {}; this.open(); }
+  open() {
+    try { this.ws = new WebSocket(this.url); } catch { return this.retry(); }
+    this.ws.onopen = () => { this.up = true; this.onstatus(true); for (const [id, s] of this.subs) this.sendSub(id, s); };
+    this.ws.onclose = () => { this.up = false; this.onstatus(false); for (const p of this.pending.values()) p.reject(new Error('Lost connection to the drone')); this.pending.clear(); this.retry(); };
+    this.ws.onerror = () => {};
+    this.ws.onmessage = (ev) => {
+      let m; try { m = JSON.parse(ev.data); } catch { return; }
+      if (m.op === 'publish') { for (const s of this.subs.values()) if (s.topic === m.topic) s.cb(m.msg); }
+      else if (m.op === 'service_response') {
+        const p = this.pending.get(m.id); if (!p) return; this.pending.delete(m.id);
+        m.result === false ? p.reject(new Error(typeof m.values === 'string' ? m.values : 'Service call failed')) : p.resolve(m.values || {});
+      }
+    };
+  }
+  retry() { clearTimeout(this.rt); this.rt = setTimeout(() => this.open(), 2000); }
+  send(o) { if (this.ws && this.ws.readyState === 1) { this.ws.send(JSON.stringify(o)); return true; } return false; }
+  call(service, type, args, timeout = 4000) {
+    return new Promise((resolve, reject) => {
+      const id = 'call:' + (++this.n);
+      if (!this.send({ op: 'call_service', id, service, type, args })) return reject(new Error('Not connected to the drone'));
+      const t = setTimeout(() => { this.pending.delete(id); reject(new Error('No answer from ' + service + '. Is seed-payload running on the drone?')); }, timeout);
+      this.pending.set(id, { resolve: (v) => { clearTimeout(t); resolve(v); }, reject: (e) => { clearTimeout(t); reject(e); } });
+    });
+  }
+  sendSub(id, s) { this.send({ op: 'subscribe', id, topic: s.topic, type: s.type, queue_length: 1 }); }
+  subscribe(topic, type, cb) { const id = 'sub:' + (++this.n); const s = { topic, type, cb }; this.subs.set(id, s); this.sendSub(id, s); }
+}
+
+// ---------- demo drone (?demo): behaves like seed-payload ----------
+class DemoDrone {
+  constructor() {
+    this.up = false; this.onstatus = () => {}; this.cbs = [];
+    const lab = { row_1: 'Red', row_2: 'Green', row_3: 'Blue', rack: 'Seeding rack', can_1: 'Can 1', can_2: 'Can 2', can_3: 'Can 3', can_4: 'Can 4' };
+    // Same mid-mission point as the mockup: two rows down, cans not grabbed yet.
+    const rel = { row_1: true, row_2: true, row_3: false, rack: false, can_1: true, can_2: true, can_3: true, can_4: true };
+    this.a = {}; for (const k in lab) this.a[k] = { label: lab[k], released: rel[k], pending: false, ok: true, error: '' };
+    this.seq = 0;
+    setTimeout(() => { this.up = true; this.onstatus(true); this.pub(); }, 300);
+    setInterval(() => this.pub(), 500);
+  }
+  pub() { const msg = { data: JSON.stringify({ seq: ++this.seq, actuators: this.a }) }; this.cbs.forEach((cb) => cb(msg)); }
+  subscribe(topic, type, cb) { this.cbs.push(cb); }
+  move(k, v) { const a = this.a[k]; a.released = v; a.pending = true; this.pub(); setTimeout(() => { a.pending = false; this.pub(); }, 350); }
+  call(service, type, args) {
+    const k = service.split('/').pop();
+    return new Promise((res) => setTimeout(() => {
+      if (k === 'grab_all') ['can_1', 'can_2', 'can_3', 'can_4'].forEach((c) => this.move(c, !args.data));
+      else this.move(k, !!args.data);
+      res({ success: true, message: 'ok' });
+    }, 60));
+  }
+}
+
+// ---------- state ----------
+const ROWS = ['row_1', 'row_2', 'row_3'], CANS = ['can_1', 'can_2', 'can_3', 'can_4'];
+let A = null;               // actuators from /seed_payload/state
+let lastState = 0;
+const busy = {};            // actuator -> waiting for the service reply
+let hasGrabbed = false;     // cans grabbed after the rack went
+try { hasGrabbed = sessionStorage.getItem('seedctl.grabbed') === '1'; } catch {}
+
+const ros = DEMO ? new DemoDrone() : new Rosbridge('ws://' + C.droneHost + ':9090');
+ros.onstatus = () => render();
+ros.subscribe('/seed_payload/state', 'std_msgs/msg/String', (m) => {
+  try { A = JSON.parse(m.data).actuators; lastState = Date.now(); render(); } catch {}
+});
+setInterval(render, 1000);
+
+function online() { return ros.up && A && Date.now() - lastState < 3000; }
+const rel = (k) => A && A[k] ? A[k].released : null;
+const pend = (k) => !!busy[k] || !!(A && A[k] && A[k].pending);
+
+function command(name, value, label) {
+  const svc = '/seed_payload/' + name;
+  const keys = name === 'grab_all' ? CANS : [name];
+  keys.forEach((k) => { busy[k] = true; }); render();
+  ros.call(svc, 'std_srvs/srv/SetBool', { data: value })
+    .then((r) => { if (r.success === false) throw new Error(r.message || 'The drone refused the command'); })
+    .catch((e) => toast((label ? label + ': ' : '') + e.message, true))
+    .finally(() => { keys.forEach((k) => { delete busy[k]; }); render(); });
+}
+
+// ---------- confirm sheet + toast ----------
+function confirmSheet(title, body, goLabel, onGo) {
+  const bg = document.createElement('div'); bg.className = 'sheet-bg';
+  bg.innerHTML = '<div class="sheet" role="alertdialog" aria-modal="true" aria-labelledby="sh-t"><h3 id="sh-t">' + esc(title) + '</h3><p>' + esc(body) +
+    '</p><div class="acts"><button type="button" class="cancel">Cancel</button><button type="button" class="go">' + esc(goLabel) + '</button></div></div>';
+  const close = () => bg.remove();
+  bg.querySelector('.cancel').onclick = close;
+  bg.querySelector('.go').onclick = () => { close(); onGo(); };
+  bg.addEventListener('click', (e) => { if (e.target === bg) close(); });
+  $('stage').appendChild(bg); bg.querySelector('.cancel').focus();
+}
+function toast(msg, bad) {
+  let t = document.querySelector('.toast'); if (!t) { t = document.createElement('div'); $('stage').appendChild(t); }
+  t.className = 'toast' + (bad ? ' bad' : ''); t.textContent = msg; t.hidden = false;
+  clearTimeout(toast.t); toast.t = setTimeout(() => { t.hidden = true; }, bad ? 6000 : 2500);
+}
+
+// ---------- build static rows / cans ----------
+const rowsEl = $('rows');
+ROWS.forEach((k, i) => {
+  const color = C.rowColors[i] || '#5A635C';
+  const d = document.createElement('div'); d.className = 'row';
+  d.innerHTML = '<div class="name"><span class="swatch" style="background:' + esc(color) + '"></span><span id="' + k + '-name"></span></div>' +
+    '<div class="servo" id="' + k + '-servo" role="img"><div class="arm" style="background:' + esc(color) + '"></div><div class="hub"></div></div>' +
+    '<div class="trough" id="' + k + '-trough" style="border-color:' + esc(color) + ';background-image:radial-gradient(circle at center,' + esc(color) + ' 0 6px,transparent 7px)"></div>' +
+    '<div class="sw-wrap"><button type="button" class="sw t-off" id="' + k + '-sw"><span class="knob"></span><span class="lab"></span></button></div>';
+  rowsEl.appendChild(d);
+  $(k + '-sw').onclick = () => { const r = rel(k); command(k, r !== true, label(k)); };
+});
+const cansEl = $('cans');
+CANS.forEach((k, i) => {
+  const d = document.createElement('div'); d.className = 'can-col';
+  d.innerHTML = '<div class="grip" id="' + k + '-grip" role="img"><div class="mount"></div><div class="claw l"><div class="foot"></div></div><div class="claw r"><div class="foot"></div></div>' +
+    '<div class="can" id="' + k + '-can"><div class="lid"></div><div class="band">' + (i + 1) + '</div></div><div class="ghost" id="' + k + '-ghost"></div></div>' +
+    '<div class="can-name"><b id="' + k + '-name"></b><span class="pill" id="' + k + '-pill"></span></div>' +
+    '<button type="button" class="sw t-off" id="' + k + '-sw"><span class="knob"></span><span class="lab"></span></button>';
+  cansEl.appendChild(d);
+  $(k + '-sw').onclick = () => { const r = rel(k); command(k, r !== true, label(k)); };
+});
+$('rackSw').onclick = () => {
+  if (rel('rack') === true) return command('rack', false, label('rack'));
+  confirmSheet('Release the seeding rack?', 'The whole seeding mechanism falls from the drone. Only do this after all three rows are down.', 'Release', () => command('rack', true, label('rack')));
+};
+$('masterSw').onclick = () => {
+  const held = CANS.filter((k) => rel(k) === false).length;
+  if (held === 4) confirmSheet('Open all four grippers?', 'Any can the drone is holding will drop.', 'Open all', () => command('grab_all', false, 'All cans'));
+  else command('grab_all', true, 'All cans');
+};
+
+function label(k) { return (A && A[k] && A[k].label) || ({ rack: 'Seeding rack' }[k] || k.replace('_', ' ').replace(/^./, (c) => c.toUpperCase())); }
+function setSw(el, opts) {
+  el.className = 'sw ' + opts.tone + (opts.on ? ' on' : '') + (opts.pending ? ' pending' : '');
+  el.querySelector('.lab').textContent = opts.label;
+  el.setAttribute('aria-pressed', String(!!opts.on));
+  el.disabled = !!opts.disabled;
+}
+function setPill(el, cls, text) { el.className = 'pill ' + cls; el.textContent = text; }
+
+// ---------- render ----------
+function render() {
+  const on = online();
+  document.body.classList.toggle('offline', !on);
+  $('droneLine').textContent = 'drone ' + (C.droneName ? C.droneName + ' · ' : '') + C.droneHost;
+  const conn = $('conn');
+  if (on) { conn.className = 'pill pill-ok'; $('connTxt').textContent = 'Connected'; }
+  else if (ros.up) { conn.className = 'pill pill-bad'; $('connTxt').textContent = 'Payload service not running'; }
+  else { conn.className = 'pill pill-muted'; $('connTxt').textContent = 'Searching for drone'; }
+  $('shadeTxt').textContent = ros.up ? 'Drone found, but seed-payload is not running on it' : 'Not connected to the drone';
+
+  // rows
+  let down = 0;
+  ROWS.forEach((k) => {
+    const r = rel(k), p = pend(k), err = A && A[k] && !A[k].ok;
+    if (r === true) down++;
+    $(k + '-name').textContent = label(k);
+    $(k + '-servo').classList.toggle('flicked', r === true);
+    $(k + '-servo').setAttribute('aria-label', label(k) + ' servo ' + (r ? 'released' : 'holding'));
+    const tr = $(k + '-trough'); tr.classList.toggle('empty', r === true); tr.textContent = r === true ? 'row dropped' : '';
+    if (err) tr.textContent = 'servo error';
+    setSw($(k + '-sw'), { on: r === true, tone: r === true ? 't-action' : 't-ink', label: r === true ? 'Dropped' : 'Loaded', pending: p, disabled: !on });
+    $(k + '-sw').setAttribute('aria-label', label(k) + ' row: loaded or dropped');
+  });
+  setPill($('rowsPill'), down ? 'pill-action' : 'pill-muted', down + ' of 3 dropped');
+
+  // rack
+  const rk = rel('rack');
+  $('rackName').textContent = label('rack');
+  setSw($('rackSw'), { on: rk === true, tone: rk === true ? 't-action' : 't-ink', label: rk === true ? 'Released' : 'Attached', pending: pend('rack'), disabled: !on });
+  const left = 3 - down;
+  if (A && A.rack && !A.rack.ok) setPill($('rackChip'), 'pill-bad', 'Error');
+  else if (rk === true) setPill($('rackChip'), 'pill-action', 'Released');
+  else if (left === 0) setPill($('rackChip'), 'pill-ink', 'Ready to release');
+  else setPill($('rackChip'), 'pill-muted', left + (left === 1 ? ' row' : ' rows') + ' still loaded');
+
+  // cans
+  let held = 0, open = 0;
+  CANS.forEach((k) => {
+    const r = rel(k), p = pend(k), err = A && A[k] && !A[k].ok;
+    if (r === false) held++; if (r === true) open++;
+    $(k + '-name').textContent = label(k);
+    $(k + '-grip').classList.toggle('open', r !== false);
+    $(k + '-can').hidden = r !== false; $(k + '-ghost').hidden = r === false;
+    $(k + '-grip').setAttribute('aria-label', label(k) + ' gripper ' + (r === false ? 'closed' : 'open'));
+    const pill = $(k + '-pill');
+    if (err) { setPill(pill, 'pill-bad', 'Error'); pill.title = A[k].error; }
+    else if (p) setPill(pill, 'pill-muted', 'Moving');
+    else if (r === false) setPill(pill, 'pill-ok', 'Holding');
+    else if (r === true) setPill(pill, 'pill-action', 'Open');
+    else setPill(pill, 'pill-muted', 'Unknown');
+    setSw($(k + '-sw'), { on: r === true, tone: r === true ? 't-action' : r === false ? 't-ink' : 't-off', label: r === true ? 'Drop' : 'Hold', pending: p, disabled: !on });
+    $(k + '-sw').setAttribute('aria-label', label(k) + ': hold or drop');
+  });
+  const all = held === 4;
+  if (all && rk === true && !hasGrabbed) { hasGrabbed = true; try { sessionStorage.setItem('seedctl.grabbed', '1'); } catch {} }
+  $('masterV').textContent = all ? 'Grabbed' : open === 4 ? 'Open' : held + ' of 4 held';
+  $('masterD').textContent = all ? 'All four grippers closed.' : open === 4 ? 'Grippers open, ready to grab.' : 'Flip to close all four.';
+  setSw($('masterSw'), { on: all, tone: all ? 't-ink' : 't-off', label: all ? 'Grab' : 'Open', pending: CANS.some(pend), disabled: !on });
+  setPill($('cansPill'), held ? 'pill-ok' : 'pill-muted', held + ' of 4 held');
+
+  // steps
+  const allOpen = open === 4;
+  const done = [down === 3, rk === true, hasGrabbed, hasGrabbed && allOpen];
+  const names = ['Drop seed rows', 'Release rack', 'Grab cans', 'Drop cans'];
+  const cur = done.indexOf(false);
+  $('steps').innerHTML = names.map((n, i) => (i ? '<span class="step-sep" aria-hidden="true"></span>' : '') +
+    '<div class="step' + (done[i] ? ' done' : i === cur ? ' current' : '') + '"><span class="num">' +
+    (done[i] ? '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12l5 5L19 7"/></svg>' : (i + 1)) +
+    '</span>' + n + '</div>').join('');
+}
+
+// ---------- dashboard webview ----------
+const frame = $('webFrame');
+let dashUp = false;
+function dashOrigin() { try { return new URL(C.dashboardUrl).origin; } catch { return ''; } }
+$('webUrl').textContent = C.dashboardUrl.replace(/^https?:\/\//, '').replace(/#.*$/, '');
+$('webMsgUrl').textContent = C.dashboardUrl.replace(/#.*$/, '');
+function showDash(up) {
+  $('webDot').classList.toggle('ok', up);
+  if (up && !dashUp) { frame.src = C.dashboardUrl; frame.hidden = false; $('webMsg').hidden = true; }
+  if (!up && dashUp) { frame.hidden = true; frame.removeAttribute('src'); $('webMsg').hidden = false; }
+  dashUp = up;
+}
+function probe() {
+  // no-cors: an opaque reply is enough to know the dashboard answers.
+  fetch(dashOrigin() + '/', { mode: 'no-cors', cache: 'no-store', signal: AbortSignal.timeout(2500) })
+    .then(() => showDash(true)).catch(() => showDash(false));
+}
+$('webReload').onclick = () => { if (DEMO) return; if (dashUp) frame.src = C.dashboardUrl; else probe(); };
+$('webFull').onclick = () => { $('web').classList.toggle('full'); };
+if (DEMO) {
+  $('webMsg').hidden = true; $('webDot').classList.add('ok');
+  const d = document.createElement('div'); d.className = 'demo-cam';
+  d.innerHTML = '<div class="cam" role="img" aria-label="Sample camera view of field rows">' +
+    '<div style="position:absolute;inset:0;background:radial-gradient(ellipse at center,rgba(0,0,0,0) 45%,rgba(0,0,0,.45) 100%)"></div>' +
+    '<div style="position:absolute;left:50%;top:50%;width:76px;height:76px;margin:-38px 0 0 -38px;border:2px solid rgba(255,255,255,.85);border-radius:50%"></div>' +
+    '<span class="hud" style="left:8px;top:8px">cam0 · demo</span><span class="hud" style="left:8px;bottom:8px">ALT 8.4 m · HDG 274°</span></div>' +
+    '<div class="tiles">' + [['Battery', '15.6 V'], ['Altitude', '8.4 m'], ['Speed', '2.1 m/s'], ['Mode', 'POSCTL'], ['Heading', '274°'], ['Link', '−61 dBm']]
+      .map(([a, b]) => '<div class="tile"><span>' + a + '</span><b>' + b + '</b></div>').join('') + '</div>';
+  $('webBody').appendChild(d);
+} else {
+  probe(); setInterval(probe, 3000);
+}
+render();
+})();
+</script>
+</body>
+</html>

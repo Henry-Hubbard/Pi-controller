@@ -1,0 +1,755 @@
+<title>DEXI Dash</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Semi+Condensed:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+/* Layout: ground-station console. Status strip on top, two tabs:
+   Monitor = camera + flight instruments + companion computer, Servos = PCA9685 channels + TCA9555 pins.
+   Fonts load from Google when online and fall back to system faces on the drone hotspot. */
+:root {
+  --bg: #e9eeee;
+  --surface: #f9fbfb;
+  --sunken: #dfe6e6;
+  --ink: #142021;
+  --muted: #586a6b;
+  --line: #cdd8d8;
+  --accent: #0a737c;
+  --accent-ink: #ffffff;
+  --accent-soft: #d2ebec;
+  --ok: #2a7a4b;
+  --warn: #a86400;
+  --crit: #bf3328;
+  --sky: #5d9fc4;
+  --ground: #8a6a45;
+  --f-display: "Barlow Semi Condensed", "Arial Narrow", "Roboto Condensed", system-ui, sans-serif;
+  --f-body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --f-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --r: 6px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0b1112; --surface: #131b1c; --sunken: #0e1516; --ink: #e1eae9; --muted: #8b9c9b;
+    --line: #243233; --accent: #3bbfc8; --accent-ink: #062226; --accent-soft: #123538;
+    --ok: #55c283; --warn: #eea83a; --crit: #f0675a; --sky: #2f6a8c; --ground: #5e4730;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0b1112; --surface: #131b1c; --sunken: #0e1516; --ink: #e1eae9; --muted: #8b9c9b;
+  --line: #243233; --accent: #3bbfc8; --accent-ink: #062226; --accent-soft: #123538;
+  --ok: #55c283; --warn: #eea83a; --crit: #f0675a; --sky: #2f6a8c; --ground: #5e4730;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { background: var(--bg); color: var(--ink); }
+body { font: 14px/1.45 var(--f-body); }
+.wrap { max-width: 1320px; margin: 0 auto; padding: 0 16px 32px; }
+.num, .mono { font-family: var(--f-mono); font-variant-numeric: tabular-nums; }
+.label { font: 600 11px/1.2 var(--f-display); letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+h2 { font: 700 15px/1.2 var(--f-display); letter-spacing: .06em; text-transform: uppercase; margin: 0; text-wrap: balance; }
+button, input, select { font: inherit; color: inherit; }
+button { cursor: pointer; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* ---- Top bar ---- */
+.top { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5; background: var(--bg); border-bottom: 1px solid var(--line); }
+.top .wrap { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 18px; padding-block: 10px; }
+.brand { display: flex; align-items: baseline; gap: 10px; margin-right: auto; }
+.brand b { font: 700 22px/1 var(--f-display); letter-spacing: .02em; }
+.brand span { color: var(--muted); font-size: 12px; }
+.pills { display: flex; flex-wrap: wrap; gap: 6px; }
+.pill { display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; border: 1px solid var(--line); border-radius: 999px; font: 600 12px/1.4 var(--f-display); letter-spacing: .04em; text-transform: uppercase; background: var(--surface); white-space: nowrap; }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex: none; }
+.pill[data-s="ok"] .dot { background: var(--ok); }
+.pill[data-s="warn"] .dot { background: var(--warn); }
+.pill[data-s="crit"] .dot { background: var(--crit); }
+.pill[data-s="crit"] { color: var(--crit); border-color: color-mix(in srgb, var(--crit) 45%, var(--line)); }
+.demo-flag { background: var(--warn); color: var(--surface); border-color: var(--warn); }
+.tabs { display: flex; gap: 2px; width: 100%; }
+.tab { border: 0; background: none; padding: 8px 14px 9px; font: 700 14px/1 var(--f-display); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); border-bottom: 3px solid transparent; }
+.tab[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--accent); }
+
+/* ---- Panels ---- */
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); padding: 14px; min-width: 0; }
+.panel-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; }
+.grid-monitor { display: grid; gap: 14px; margin-top: 16px; grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr); }
+@media (max-width: 900px) { .grid-monitor { grid-template-columns: minmax(0, 1fr); } }
+.stack { display: grid; gap: 14px; align-content: start; min-width: 0; }
+
+/* Camera */
+.cam { position: relative; aspect-ratio: 16/9; max-width: 100%; background: #050808; border-radius: 4px; overflow: hidden; display: grid; place-items: center; }
+.cam img { width: 100%; height: 100%; object-fit: contain; display: block; }
+.cam .empty { position: absolute; color: #8b9c9b; font-size: 13px; text-align: center; padding: 16px; }
+.cam .hud { position: absolute; left: 8px; bottom: 8px; display: flex; gap: 6px; }
+.cam .hud span { background: rgba(5,8,8,.7); color: #e1eae9; font: 500 11px/1 var(--f-mono); padding: 4px 6px; border-radius: 3px; }
+
+/* Instruments */
+.inst { display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 14px; align-items: center; }
+@media (max-width: 420px) { .inst { grid-template-columns: minmax(0, 1fr); justify-items: center; } }
+#adi { width: 150px; height: 150px; max-width: 100%; display: block; }
+.readouts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 14px; width: 100%; }
+.ro .v { font: 500 22px/1.1 var(--f-mono); font-variant-numeric: tabular-nums; }
+.ro .v small { font-size: 12px; color: var(--muted); margin-left: 3px; }
+.bar { height: 6px; background: var(--sunken); border-radius: 3px; overflow: hidden; margin-top: 6px; }
+.bar i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .4s; }
+.bar[data-s="warn"] i { background: var(--warn); }
+.bar[data-s="crit"] i { background: var(--crit); }
+.kv { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px 14px; }
+@media (max-width: 560px) { .kv { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.chip { display: inline-block; padding: 2px 7px; border-radius: 3px; font: 600 12px/1.4 var(--f-display); letter-spacing: .05em; text-transform: uppercase; background: var(--sunken); color: var(--muted); }
+.chip[data-s="ok"] { background: color-mix(in srgb, var(--ok) 16%, transparent); color: var(--ok); }
+.chip[data-s="warn"] { background: color-mix(in srgb, var(--warn) 16%, transparent); color: var(--warn); }
+.chip[data-s="crit"] { background: color-mix(in srgb, var(--crit) 16%, transparent); color: var(--crit); }
+.spark { width: 100%; height: 34px; display: block; margin-top: 4px; }
+.log { list-style: none; margin: 0; padding: 0; max-height: 210px; overflow: auto; font: 12px/1.5 var(--f-mono); }
+.log li { display: grid; grid-template-columns: 64px 64px minmax(0, 1fr); gap: 8px; padding: 4px 0; border-top: 1px solid var(--line); }
+.log li:first-child { border-top: 0; }
+.log .t { color: var(--muted); }
+.log [data-s="crit"] { color: var(--crit); } .log [data-s="warn"] { color: var(--warn); } .log [data-s="info"] { color: var(--muted); }
+.addr { font: 12px/1.6 var(--f-mono); color: var(--muted); overflow-wrap: anywhere; }
+
+/* ---- Servos ---- */
+.grid-servo { display: grid; gap: 14px; margin-top: 16px; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); align-items: start; }
+@media (max-width: 960px) { .grid-servo { grid-template-columns: minmax(0, 1fr); } }
+.master { display: grid; grid-template-columns: auto minmax(0, 1fr) 64px; gap: 14px; align-items: center; padding: 12px; background: var(--accent-soft); border-radius: var(--r); margin-bottom: 6px; }
+.master b { font: 700 15px/1 var(--f-display); letter-spacing: .05em; text-transform: uppercase; }
+.servo { display: grid; grid-template-columns: 112px minmax(0, 1fr) 64px auto; gap: 8px 14px; align-items: center; padding: 12px 2px; border-top: 1px solid var(--line); }
+.servo:first-of-type { border-top: 0; }
+.servo .name { display: grid; gap: 2px; min-width: 0; }
+.servo .name b { font: 600 15px/1.1 var(--f-display); letter-spacing: .02em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.servo .name span { font: 11px/1.2 var(--f-mono); color: var(--muted); }
+.servo .quick { display: flex; gap: 4px; align-items: center; }
+.servo .meta { grid-column: 2 / -1; display: flex; flex-wrap: wrap; gap: 4px 14px; font: 11px/1.3 var(--f-mono); color: var(--muted); margin-top: -4px; }
+.servo .meta label { display: inline-flex; align-items: center; gap: 5px; font-family: var(--f-body); cursor: pointer; }
+@media (max-width: 620px) {
+  .servo { grid-template-columns: minmax(0, 1fr) 64px; }
+  .servo .name { grid-column: 1 / -1; }
+  .servo .quick { grid-column: 1 / -1; }
+  .servo .meta { grid-column: 1 / -1; margin-top: 0; }
+  .master { grid-template-columns: minmax(0, 1fr) 64px; }
+  .master b { grid-column: 1 / -1; }
+}
+.angle { width: 64px; padding: 5px 6px; border: 1px solid var(--line); border-radius: 4px; background: var(--bg); text-align: right; font: 500 15px/1 var(--f-mono); font-variant-numeric: tabular-nums; }
+.btn { border: 1px solid var(--line); background: var(--surface); border-radius: 4px; padding: 5px 9px; font: 600 12px/1.2 var(--f-display); letter-spacing: .05em; text-transform: uppercase; }
+.btn:hover { border-color: var(--accent); color: var(--accent); }
+.btn.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.btn.primary:hover { color: var(--accent-ink); filter: brightness(1.08); }
+.btn:disabled { opacity: .5; cursor: not-allowed; }
+.toolbar { display: flex; flex-wrap: wrap; gap: 6px; }
+.status-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--line); justify-self: center; }
+.status-dot[data-s="ok"] { background: var(--ok); }
+.status-dot[data-s="busy"] { background: var(--warn); }
+.status-dot[data-s="crit"] { background: var(--crit); }
+
+/* range slider with a degree scale */
+input[type=range] { -webkit-appearance: none; appearance: none; width: 100%; height: 28px; background: transparent; margin: 0; }
+input[type=range]::-webkit-slider-runnable-track { height: 6px; border-radius: 3px; background: linear-gradient(to right, var(--accent) var(--p, 50%), var(--sunken) var(--p, 50%)); }
+input[type=range]::-moz-range-track { height: 6px; border-radius: 3px; background: var(--sunken); }
+input[type=range]::-moz-range-progress { height: 6px; border-radius: 3px; background: var(--accent); }
+input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 20px; height: 20px; margin-top: -7px; border-radius: 50%; background: var(--surface); border: 3px solid var(--accent); }
+input[type=range]::-moz-range-thumb { width: 14px; height: 14px; border-radius: 50%; background: var(--surface); border: 3px solid var(--accent); }
+.scale { display: flex; justify-content: space-between; font: 10px/1 var(--f-mono); color: var(--muted); padding: 0 6px; margin-top: -2px; }
+
+/* GPIO */
+.pins { display: grid; gap: 10px; }
+.pin { display: grid; grid-template-columns: 40px minmax(0, 1fr) auto; gap: 12px; align-items: center; padding: 10px; border: 1px solid var(--line); border-radius: var(--r); background: var(--bg); }
+.led { width: 28px; height: 28px; border-radius: 50%; background: var(--sunken); border: 2px solid var(--line); justify-self: center; transition: background .15s, box-shadow .15s; }
+.led[data-on="1"] { background: var(--ok); border-color: var(--ok); box-shadow: 0 0 0 4px color-mix(in srgb, var(--ok) 22%, transparent); }
+.pin .info { min-width: 0; display: grid; gap: 3px; }
+.pin .info b { font: 600 15px/1.1 var(--f-display); }
+.pin .info span { font: 11px/1.3 var(--f-mono); color: var(--muted); }
+.pin .acts { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.switch { position: relative; width: 74px; height: 30px; border-radius: 15px; border: 1px solid var(--line); background: var(--sunken); font: 700 11px/1 var(--f-display); letter-spacing: .06em; padding: 0 10px 0 30px; text-align: left; color: var(--muted); }
+.switch::before { content: ""; position: absolute; left: 3px; top: 3px; width: 22px; height: 22px; border-radius: 50%; background: var(--surface); border: 1px solid var(--line); transition: left .15s; }
+.switch[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); padding: 0 30px 0 10px; }
+.switch[aria-pressed="true"]::before { left: 47px; }
+.note { font-size: 12px; color: var(--muted); margin: 10px 0 0; max-width: 62ch; }
+.note code { font-family: var(--f-mono); font-size: 11px; background: var(--sunken); padding: 1px 4px; border-radius: 3px; overflow-wrap: anywhere; }
+
+details.settings { margin-top: 14px; }
+details.settings summary { cursor: pointer; font: 700 13px/1.2 var(--f-display); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.settings-grid { display: grid; gap: 8px; margin-top: 10px; overflow-x: auto; }
+.srow { display: grid; grid-template-columns: minmax(90px, 1.4fr) 58px 72px 72px; gap: 8px; align-items: center; min-width: 330px; }
+.srow input, .srow select, .field input { width: 100%; padding: 5px 6px; border: 1px solid var(--line); border-radius: 4px; background: var(--bg); font-size: 13px; }
+.field { display: grid; gap: 4px; margin-top: 10px; }
+.toast { position: fixed; left: 50%; bottom: calc(16px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%); background: var(--ink); color: var(--bg); padding: 8px 14px; border-radius: 4px; font-size: 13px; z-index: 10; max-width: calc(100% - 32px); }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+
+/* #embed: camera + battery/position only, for the Seed Drop Controller's side panel */
+body.embed .top, body.embed .no-embed { display: none !important; }
+body.embed .wrap { padding: 0 10px 10px; }
+body.embed .grid-monitor { grid-template-columns: minmax(0, 1fr); gap: 10px; margin-top: 10px; }
+body.embed .stack { gap: 10px; }
+body.embed .panel { padding: 10px; }
+body.embed .panel-head { margin-bottom: 8px; }
+body.embed .ro .v { font-size: 19px; }
+</style>
+
+<header class="top">
+  <div class="wrap">
+    <div class="brand"><b>DEXI Dash</b><span id="ver" class="mono">version unknown</span></div>
+    <div class="pills">
+      <span class="pill demo-flag" id="demoPill" hidden>Demo data</span>
+      <span class="pill" id="pRos" data-s=""><i class="dot"></i>ROS</span>
+      <span class="pill" id="pFc" data-s=""><i class="dot"></i>Flight ctrl</span>
+      <span class="pill" id="pArm" data-s=""><i class="dot"></i><span>Disarmed</span></span>
+      <span class="pill" id="pMode" data-s=""><span>Mode —</span></span>
+    </div>
+    <nav class="tabs" role="tablist">
+      <button class="tab" role="tab" id="tab-monitor" aria-selected="true" data-tab="monitor">Monitor</button>
+      <button class="tab" role="tab" id="tab-servos" aria-selected="false" data-tab="servos">Servos &amp; GPIO</button>
+    </nav>
+  </div>
+</header>
+
+<main class="wrap">
+  <!-- ================= MONITOR ================= -->
+  <section id="view-monitor" role="tabpanel" aria-labelledby="tab-monitor">
+    <div class="grid-monitor">
+      <div class="stack">
+        <div class="panel">
+          <div class="panel-head"><h2>Camera</h2><span class="label mono" id="camTopic"></span></div>
+          <div class="cam">
+            <img id="camImg" alt="Live camera feed" hidden>
+            <div class="empty" id="camEmpty">Waiting for frames on the camera topic…</div>
+            <div class="hud"><span id="camFps">0 fps</span><span id="camAlt">ALT —</span></div>
+          </div>
+        </div>
+        <div class="panel no-embed">
+          <div class="panel-head"><h2>Companion computer</h2><span class="label mono" id="host">—</span></div>
+          <div class="kv">
+            <div><div class="label">CPU</div><div class="ro"><div class="v num" id="cpu">—</div></div><svg class="spark" id="cpuSpark" viewBox="0 0 120 34" preserveAspectRatio="none"></svg></div>
+            <div><div class="label">Memory</div><div class="ro"><div class="v num" id="mem">—</div></div><div class="bar" id="memBar"><i></i></div><div class="label mono" id="memTxt" style="margin-top:6px"></div></div>
+            <div><div class="label">SoC temp</div><div class="ro"><div class="v num" id="temp">—</div></div><div class="bar" id="tempBar"><i></i></div></div>
+            <div><div class="label">Disk</div><div class="ro"><div class="v num" id="disk">—</div></div><div class="bar" id="diskBar"><i></i></div></div>
+            <div><div class="label">Uptime</div><div class="ro"><div class="v num" id="uptime">—</div></div><div class="label mono" id="load" style="margin-top:6px"></div></div>
+            <div><div class="label">Wi-Fi</div><div class="ro"><div class="v num" id="wifi">—</div></div><div class="addr" id="ips"></div></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="stack">
+        <div class="panel no-embed">
+          <div class="panel-head"><h2>Flight</h2><span class="chip" id="ekf">EKF —</span></div>
+          <div class="inst">
+            <canvas id="adi" width="300" height="300" aria-label="Attitude indicator"></canvas>
+            <div class="readouts">
+              <div class="ro"><div class="label">Roll</div><div class="v num" id="roll">—</div></div>
+              <div class="ro"><div class="label">Pitch</div><div class="v num" id="pitch">—</div></div>
+              <div class="ro"><div class="label">Heading</div><div class="v num" id="hdg">—</div></div>
+              <div class="ro"><div class="label">Climb</div><div class="v num" id="climb">—</div></div>
+            </div>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><h2>Battery &amp; position</h2></div>
+          <div class="kv" style="grid-template-columns:repeat(2,minmax(0,1fr))">
+            <div><div class="label">Battery</div><div class="ro"><div class="v num" id="batt">—</div></div><div class="bar" id="battBar"><i></i></div><div class="label mono" id="battTxt" style="margin-top:6px"></div></div>
+            <div><div class="label">Current</div><div class="ro"><div class="v num" id="amps">—</div></div></div>
+            <div><div class="label">Altitude (rel)</div><div class="ro"><div class="v num" id="alt">—</div></div></div>
+            <div><div class="label">Rangefinder</div><div class="ro"><div class="v num" id="range">—</div></div></div>
+            <div><div class="label">Ground speed</div><div class="ro"><div class="v num" id="gs">—</div></div></div>
+            <div><div class="label">Position accuracy</div><div class="ro"><div class="v num" id="acc">—</div></div></div>
+          </div>
+        </div>
+        <div class="panel no-embed">
+          <div class="panel-head"><h2>Flight controller messages</h2><button class="btn" id="clearLog">Clear</button></div>
+          <ul class="log" id="log"></ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= SERVOS & GPIO ================= -->
+  <section id="view-servos" role="tabpanel" aria-labelledby="tab-servos" hidden>
+    <div class="grid-servo">
+      <div class="panel">
+        <div class="panel-head">
+          <h2>Servos <span class="label">PCA9685</span></h2>
+          <div class="toolbar">
+            <button class="btn" id="centerAll">Center all</button>
+            <button class="btn" id="sweep">Sweep test</button>
+          </div>
+        </div>
+        <div class="master">
+          <b>All servos</b>
+          <div><input type="range" id="masterRange" min="0" max="180" step="1" value="90" aria-label="All servos angle"><div class="scale"><span>0°</span><span>45°</span><span>90°</span><span>135°</span><span>180°</span></div></div>
+          <input class="angle" id="masterNum" type="number" min="0" max="180" value="90" aria-label="All servos angle value">
+        </div>
+        <div id="servoList"></div>
+        <details class="settings">
+          <summary>Servo setup</summary>
+          <div class="settings-grid" id="servoSettings">
+            <div class="srow label"><span>Name</span><span>Channel</span><span>Min µs</span><span>Max µs</span></div>
+          </div>
+          <p class="note">Most hobby servos want 1000–2000 µs; DEXI's default is 500–2500 µs. If a servo buzzes at the ends of its travel, narrow the range.</p>
+        </details>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head">
+          <h2>GPIO <span class="label">TCA9555</span></h2>
+          <button class="btn" id="allLow">All outputs low</button>
+        </div>
+        <div class="pins" id="pinList"></div>
+        <details class="settings">
+          <summary>Pin setup</summary>
+          <div class="settings-grid" id="pinSettings"></div>
+          <p class="note">Pin direction is fixed when the GPIO node starts. Match these to the <code>pin_N_mode</code> values in <code>dexi_cpp/launch/tca9555_controller.launch.py</code> (default: pins 0–2 output, 3–4 input).</p>
+          <div class="field"><label class="label" for="gpioTopic">Input topic pattern</label><input id="gpioTopic" class="mono"></div>
+          <div class="field"><label class="label" for="camTopicIn">Camera topic</label><input id="camTopicIn" class="mono"></div>
+        </details>
+      </div>
+    </div>
+  </section>
+</main>
+<div class="toast" id="toast" hidden></div>
+
+<script>
+(() => {
+'use strict';
+const Q = new URLSearchParams(location.search);
+const DEMO = !!window.DEXI_DEMO || Q.has('demo');
+const HOST = Q.get('host') || location.hostname || 'localhost';
+const $ = (id) => document.getElementById(id);
+
+// ---------------- settings ----------------
+const DEFAULTS = {
+  servos: [0, 1, 2, 3, 4].map((ch) => ({ name: 'Servo ' + (ch + 1), ch, min: 500, max: 2500, angle: 90, invert: false, linked: true })),
+  pins: [0, 1, 2, 3, 4].map((pin) => ({ name: 'GPIO ' + pin, pin, mode: pin < 3 ? 'out' : 'in' })),
+  gpioTopic: '/tca9555_controller/gpio_{pin}_state',
+  camTopic: '/cam0/image_raw/compressed',
+  tab: 'monitor',
+};
+let cfg;
+try { cfg = Object.assign(structuredClone(DEFAULTS), JSON.parse(localStorage.getItem('dexi-dash-v1') || '{}')); }
+catch { cfg = structuredClone(DEFAULTS); }
+let saveT;
+function save() { clearTimeout(saveT); saveT = setTimeout(() => { try { localStorage.setItem('dexi-dash-v1', JSON.stringify(cfg)); } catch {} }, 300); }
+
+function toast(msg) { const t = $('toast'); t.textContent = msg; t.hidden = false; clearTimeout(toast.t); toast.t = setTimeout(() => { t.hidden = true; }, 2600); }
+function setS(el, s) { el.dataset.s = s || ''; }
+
+// ---------------- rosbridge (plain protocol, no library) ----------------
+class Rosbridge {
+  constructor(url) { this.url = url; this.subs = new Map(); this.pending = new Map(); this.n = 0; this.connected = false; this.onstatus = () => {}; this.open(); }
+  open() {
+    try { this.ws = new WebSocket(this.url); } catch { return this.retry(); }
+    this.ws.onopen = () => { this.connected = true; this.onstatus(true); for (const [id, s] of this.subs) this.sendSub(id, s); };
+    this.ws.onclose = () => {
+      this.connected = false; this.onstatus(false);
+      for (const [, p] of this.pending) p.reject(new Error('rosbridge disconnected'));
+      this.pending.clear(); this.retry();
+    };
+    this.ws.onerror = () => {};
+    this.ws.onmessage = (ev) => {
+      let m; try { m = JSON.parse(ev.data); } catch { return; }
+      if (m.op === 'publish') { for (const s of this.subs.values()) if (s.topic === m.topic) s.cb(m.msg); }
+      else if (m.op === 'service_response') {
+        const p = this.pending.get(m.id); if (!p) return; this.pending.delete(m.id);
+        m.result === false ? p.reject(new Error(typeof m.values === 'string' ? m.values : 'service call failed')) : p.resolve(m.values || {});
+      }
+    };
+  }
+  retry() { clearTimeout(this.rt); this.rt = setTimeout(() => this.open(), 2000); }
+  send(o) { if (this.ws && this.ws.readyState === 1) { this.ws.send(JSON.stringify(o)); return true; } return false; }
+  call(service, type, args, timeout = 3000) {
+    return new Promise((resolve, reject) => {
+      const id = 'call:' + (++this.n);
+      if (!this.send({ op: 'call_service', id, service, type, args })) return reject(new Error('Not connected to rosbridge on :9090'));
+      const t = setTimeout(() => { this.pending.delete(id); reject(new Error('No reply from ' + service + ' (is the node running?)')); }, timeout);
+      this.pending.set(id, { resolve: (v) => { clearTimeout(t); resolve(v); }, reject: (e) => { clearTimeout(t); reject(e); } });
+    });
+  }
+  sendSub(id, s) { this.send({ op: 'subscribe', id, topic: s.topic, type: s.type, throttle_rate: s.throttle || 0, queue_length: 1 }); }
+  subscribe(topic, type, cb, throttle) {
+    const id = 'sub:' + (++this.n); const s = { topic, type, cb, throttle };
+    this.subs.set(id, s); this.sendSub(id, s);
+    return () => { this.subs.delete(id); this.send({ op: 'unsubscribe', id, topic }); };
+  }
+}
+
+// ---------------- demo backends ----------------
+class DemoRos {
+  constructor() { this.connected = true; this.onstatus = () => {}; this.subs = new Map(); this.n = 0; this.pins = {}; setTimeout(() => this.onstatus(true), 50); this.loop(); }
+  call(service, type, args) {
+    return new Promise((res, rej) => setTimeout(() => {
+      if (service.endsWith('servo_control')) {
+        if (args.pin < 0 || args.pin > 15) return res({ success: false, message: 'Invalid channel number. Must be between 0 and 15' });
+        res({ success: true, message: 'Servo position updated successfully' });
+      } else if (service.endsWith('write_gpio')) {
+        this.pins[args.pin] = args.state; res({ success: true, message: 'ok' });
+      } else rej(new Error('Unknown service ' + service));
+    }, 30 + Math.random() * 40));
+  }
+  subscribe(topic, type, cb) { const id = ++this.n; this.subs.set(id, { topic, cb }); return () => this.subs.delete(id); }
+  loop() {
+    const c = document.createElement('canvas'); c.width = 640; c.height = 360; const g = c.getContext('2d');
+    let t = 0;
+    setInterval(() => {
+      t += 0.15;
+      // Downward camera over a lab floor: tiles, a landing pad and an AprilTag-ish marker.
+      g.fillStyle = '#6f6a62'; g.fillRect(0, 0, 640, 360);
+      const ox = (Math.sin(t * 0.3) * 60) % 80, oy = (t * 14) % 80;
+      g.strokeStyle = 'rgba(30,28,25,.45)'; g.lineWidth = 2;
+      for (let x = -80 + ox; x < 720; x += 80) { g.beginPath(); g.moveTo(x, 0); g.lineTo(x, 360); g.stroke(); }
+      for (let y = -80 + oy; y < 440; y += 80) { g.beginPath(); g.moveTo(0, y); g.lineTo(640, y); g.stroke(); }
+      const px = 320 + Math.sin(t * 0.3) * 60, py = 180 + Math.cos(t * 0.2) * 30;
+      g.fillStyle = '#e9e6df'; g.fillRect(px - 52, py - 52, 104, 104);
+      g.fillStyle = '#111'; g.fillRect(px - 44, py - 44, 88, 88);
+      g.fillStyle = '#e9e6df';
+      [[0,0],[2,0],[1,1],[3,1],[0,2],[2,3],[3,3],[1,3]].forEach(([i, j]) => g.fillRect(px - 33 + i * 17, py - 33 + j * 17, 17, 17));
+      g.strokeStyle = '#3bbfc8'; g.lineWidth = 3; g.strokeRect(px - 56, py - 56, 112, 112);
+      g.fillStyle = '#3bbfc8'; g.font = '600 14px monospace'; g.fillText('tag36h11 id 7', px - 56, py - 64);
+      const data = c.toDataURL('image/jpeg', 0.7).split(',')[1];
+      const inputs = { 3: Math.sin(t * 0.7) > 0.4, 4: Math.floor(t / 4) % 2 === 0 };
+      for (const s of this.subs.values()) {
+        if (s.topic.includes('image')) s.cb({ format: 'jpeg', data });
+        const m = s.topic.match(/gpio_(\d+)_state/); if (m) { const p = Number(m[1]); s.cb({ data: p in inputs ? inputs[p] : !!this.pins[p] }); }
+      }
+    }, 120);
+  }
+}
+
+// ---------------- telemetry (mavlink2rest) ----------------
+const T = { connected: false, hb: 0, armed: false, mode: null, battV: null, battPct: null, amps: null, altRel: null, gs: null, climb: null, hdg: null, roll: null, pitch: null, range: null, flow: null, acc: null, log: [] };
+const MODES = { 1: 'MANUAL', 2: 'ALTCTL', 3: 'POSCTL', 4: 'AUTO', 5: 'ACRO', 6: 'OFFBOARD', 7: 'STABILIZED' };
+const AUTO = { 1: 'READY', 2: 'TAKEOFF', 3: 'LOITER', 4: 'MISSION', 5: 'RTL', 6: 'LAND', 9: 'PRECLAND' };
+const SEV = ['EMERG', 'ALERT', 'CRIT', 'ERROR', 'WARN', 'NOTICE', 'INFO', 'DEBUG'];
+function modeName(c) { const main = (c >> 16) & 255, sub = (c >> 24) & 255; return main === 4 ? 'AUTO.' + (AUTO[sub] || sub) : (MODES[main] || 'MODE ' + main); }
+const fin = (x) => typeof x === 'number' && Number.isFinite(x);
+function addLog(sev, text) {
+  const last = T.log[0]; if (last && last.text === text && Date.now() - last.ts < 800) return;
+  T.log.unshift({ ts: Date.now(), sev, text }); if (T.log.length > 60) T.log.length = 60; renderLog();
+}
+function onMav(env) {
+  const m = env && env.message; if (!m || !m.type) return;
+  switch (m.type) {
+    case 'HEARTBEAT':
+      if (env.header && env.header.component_id && env.header.component_id !== 1) return;
+      T.hb = Date.now(); T.connected = true;
+      T.armed = typeof m.base_mode === 'string' ? m.base_mode.includes('SAFETY_ARMED') : (m.base_mode & 0x80) !== 0;
+      T.mode = modeName(Number(m.custom_mode || 0)); break;
+    case 'BATTERY_STATUS': {
+      const v = (m.voltages || []).filter((x) => x !== 65535);
+      if (v.length) T.battV = v[0] / 1000;
+      if (fin(m.battery_remaining) && m.battery_remaining >= 0) T.battPct = m.battery_remaining;
+      if (fin(m.current_battery) && m.current_battery >= 0) T.amps = m.current_battery / 100; break; }
+    case 'SYS_STATUS':
+      if (T.battV == null && fin(m.voltage_battery)) T.battV = m.voltage_battery / 1000;
+      if (T.battPct == null && fin(m.battery_remaining) && m.battery_remaining >= 0) T.battPct = m.battery_remaining; break;
+    case 'VFR_HUD': if (fin(m.groundspeed)) T.gs = m.groundspeed; if (fin(m.climb)) T.climb = m.climb; if (fin(m.heading)) T.hdg = m.heading; break;
+    case 'ATTITUDE': if (fin(m.roll)) T.roll = m.roll; if (fin(m.pitch)) T.pitch = m.pitch; break;
+    case 'ALTITUDE': if (fin(m.altitude_relative)) T.altRel = m.altitude_relative; break;
+    case 'DISTANCE_SENSOR': if (fin(m.current_distance)) T.range = m.current_distance / 100; break;
+    case 'ESTIMATOR_STATUS': {
+      const f = typeof m.flags === 'string' ? m.flags : '';
+      T.flow = f ? f.includes('VELOCITY_HORIZ') && f.includes('POS_HORIZ_REL') : null;
+      if (fin(m.pos_horiz_accuracy)) T.acc = m.pos_horiz_accuracy; break; }
+    case 'STATUSTEXT': {
+      const raw = typeof m.text === 'string' ? m.text : Array.isArray(m.text) ? m.text.join('') : '';
+      const text = raw.replace(/\0/g, '').trim(); if (!text) break;
+      const sev = typeof m.severity === 'number' ? m.severity : ({ MAV_SEVERITY_EMERGENCY: 0, MAV_SEVERITY_ALERT: 1, MAV_SEVERITY_CRITICAL: 2, MAV_SEVERITY_ERROR: 3, MAV_SEVERITY_WARNING: 4, MAV_SEVERITY_NOTICE: 5, MAV_SEVERITY_INFO: 6 }[m.severity && m.severity.type] ?? 6);
+      addLog(sev, text); break; }
+  }
+}
+function startMavlink() {
+  const base = 'http://' + HOST + ':8088';
+  let ws;
+  const open = () => {
+    try { ws = new WebSocket('ws://' + HOST + ':8088/ws/mavlink'); } catch { return setTimeout(open, 2000); }
+    ws.onmessage = (e) => { try { onMav(JSON.parse(e.data)); } catch {} };
+    ws.onclose = () => setTimeout(open, 2000);
+  };
+  open();
+  // Slow-rate messages arrive about every 10 s on the socket; poll the cache so cards fill quickly.
+  const poll = () => ['BATTERY_STATUS', 'SYS_STATUS', 'ESTIMATOR_STATUS', 'DISTANCE_SENSOR', 'ALTITUDE'].forEach((t) =>
+    fetch(base + '/mavlink/vehicles/1/components/1/messages/' + t, { signal: AbortSignal.timeout(1500) })
+      .then((r) => r.ok ? r.json() : null).then((j) => j && onMav(j)).catch(() => {}));
+  poll(); setInterval(poll, 2000);
+}
+function startDemoMavlink() {
+  let t = 0, batt = 12.45;
+  const msgs = [[6, 'Ready for takeoff!'], [6, 'Armed by external command'], [6, '[logger] logging started'], [6, 'Takeoff detected'], [4, 'Low on-board CPU headroom'], [5, 'Holding position'], [6, 'Landing at current position'], [6, 'Landing detected'], [6, 'Disarmed by landing']];
+  let mi = 0;
+  addLog(6, 'Demo mode: telemetry below is simulated');
+  setInterval(() => {
+    t += 0.1;
+    const alt = Math.max(0, 1.5 + Math.sin(t * 0.25) * 0.4);
+    batt = Math.max(10.6, batt - 0.0004);
+    onMav({ message: { type: 'HEARTBEAT', base_mode: 0x80 | 0x01, custom_mode: (3 << 16) } });
+    onMav({ message: { type: 'ATTITUDE', roll: Math.sin(t * 0.9) * 0.12, pitch: Math.cos(t * 0.7) * 0.08 } });
+    onMav({ message: { type: 'VFR_HUD', groundspeed: 0.4 + Math.abs(Math.sin(t * 0.3)) * 0.6, climb: Math.cos(t * 0.25) * 0.1, heading: Math.round((90 + t * 4) % 360) } });
+    onMav({ message: { type: 'ALTITUDE', altitude_relative: alt } });
+    onMav({ message: { type: 'DISTANCE_SENSOR', current_distance: Math.round((alt + 0.05) * 100) } });
+    onMav({ message: { type: 'BATTERY_STATUS', voltages: [Math.round(batt * 1000)], battery_remaining: Math.round((batt - 10.5) / 2.1 * 100), current_battery: 1450 + Math.round(Math.sin(t) * 120) } });
+    onMav({ message: { type: 'ESTIMATOR_STATUS', flags: 'ESTIMATOR_ATTITUDE | ESTIMATOR_VELOCITY_HORIZ | ESTIMATOR_POS_HORIZ_REL', pos_horiz_accuracy: 0.08 + Math.abs(Math.sin(t)) * 0.03 } });
+    if (Math.round(t * 10) % 70 === 0) { const [s, x] = msgs[mi++ % msgs.length]; addLog(s, x); }
+  }, 100);
+}
+
+// ---------------- companion computer ----------------
+let SYS = null, VER = null;
+function startSystem() {
+  const get = () => fetch('/api/system', { cache: 'no-store' }).then((r) => r.ok ? r.json() : null).then((j) => { SYS = j; }).catch(() => {});
+  get(); setInterval(get, 2000);
+  fetch('/api/version').then((r) => r.ok ? r.json() : null).then((j) => { VER = j; renderVersion(); }).catch(() => {});
+}
+function startDemoSystem() {
+  const hist = []; let up = 1834;
+  VER = { os: 'v0.23', platform: 'pi5' }; renderVersion();
+  const tick = () => {
+    const cpu = 28 + Math.random() * 18 + (hist.length % 20 > 15 ? 20 : 0);
+    hist.push(Math.round(cpu * 10) / 10); if (hist.length > 60) hist.shift(); up += 2;
+    SYS = { hostname: 'dexi-a41f', cpu: { percent: hist[hist.length - 1], history: hist.slice(), cores: 4 }, load: [1.42, 1.31, 1.18],
+      memory: { total: 8 * 2 ** 30, used: 3.1 * 2 ** 30 + Math.random() * 1e8 }, temperatureC: 61 + Math.random() * 3, disk: { total: 29.3 * 2 ** 30, used: 17.8 * 2 ** 30 },
+      uptimeSec: up, wifi: { link: 58, signalDbm: -52 }, addresses: [{ iface: 'wlan0', ip: '192.168.4.1' }, { iface: 'eth0', ip: '10.0.0.42' }] };
+  };
+  tick(); setInterval(tick, 2000);
+}
+
+// ---------------- connect ----------------
+const ros = DEMO ? new DemoRos() : new Rosbridge('ws://' + HOST + ':9090');
+let rosUp = false;
+ros.onstatus = (up) => { rosUp = up; renderPills(); if (up) syncInputs(); };
+if (DEMO) { $('demoPill').hidden = false; startDemoMavlink(); startDemoSystem(); }
+else { startMavlink(); startSystem(); }
+
+// ---------------- monitor rendering ----------------
+const fmt = (v, d = 1, u = '') => v == null ? '—' : v.toFixed(d) + (u ? '<small>' + u + '</small>' : '');
+const deg = (r) => r == null ? null : r * 180 / Math.PI;
+function setBar(id, pct, warnAt, critAt, invert) {
+  const el = $(id); el.querySelector('i').style.width = (pct == null ? 0 : Math.max(0, Math.min(100, pct))) + '%';
+  let s = ''; if (pct != null) { if (invert ? pct <= critAt : pct >= critAt) s = 'crit'; else if (invert ? pct <= warnAt : pct >= warnAt) s = 'warn'; }
+  setS(el, s);
+}
+const gb = (b) => (b / 2 ** 30).toFixed(1);
+function dur(s) { const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60); return d ? d + 'd ' + h + 'h' : h + 'h ' + String(m).padStart(2, '0') + 'm'; }
+function renderVersion() {
+  if (!VER) return;
+  $('ver').textContent = [VER.os || 'version unknown', VER.platform].filter(Boolean).join(' · ');
+}
+function renderPills() {
+  setS($('pRos'), rosUp ? 'ok' : 'crit');
+  const fcUp = T.connected && Date.now() - T.hb < 3000; T.connected = fcUp;
+  setS($('pFc'), fcUp ? 'ok' : 'crit');
+  setS($('pArm'), fcUp && T.armed ? 'warn' : '');
+  $('pArm').querySelector('span').textContent = fcUp && T.armed ? 'Armed' : 'Disarmed';
+  $('pMode').querySelector('span').textContent = fcUp && T.mode ? T.mode : 'Mode —';
+}
+function renderMonitor() {
+  renderPills();
+  $('roll').innerHTML = fmt(deg(T.roll), 1, '°'); $('pitch').innerHTML = fmt(deg(T.pitch), 1, '°');
+  $('hdg').innerHTML = T.hdg == null ? '—' : String(Math.round(T.hdg)).padStart(3, '0') + '<small>°</small>';
+  $('climb').innerHTML = fmt(T.climb, 2, 'm/s');
+  $('batt').innerHTML = fmt(T.battV, 2, 'V'); setBar('battBar', T.battPct, 30, 15, true);
+  $('battTxt').textContent = T.battPct == null ? '' : T.battPct + '% · ' + (T.battV / 3).toFixed(2) + ' V/cell (3S)';
+  $('amps').innerHTML = fmt(T.amps, 1, 'A'); $('alt').innerHTML = fmt(T.altRel, 2, 'm'); $('range').innerHTML = fmt(T.range, 2, 'm');
+  $('gs').innerHTML = fmt(T.gs, 2, 'm/s'); $('acc').innerHTML = T.acc == null ? '—' : '±' + fmt(T.acc, 2, 'm');
+  $('camAlt').textContent = 'ALT ' + (T.altRel == null ? '—' : T.altRel.toFixed(2) + ' m');
+  const ekf = $('ekf');
+  if (T.flow == null) { ekf.textContent = 'EKF —'; setS(ekf, ''); } else { ekf.textContent = T.flow ? 'Flow fusing' : 'No flow fusion'; setS(ekf, T.flow ? 'ok' : 'warn'); }
+  if (SYS) {
+    $('host').textContent = SYS.hostname || '—';
+    const c = SYS.cpu && SYS.cpu.percent; $('cpu').innerHTML = fmt(c, 0, '%');
+    drawSpark(SYS.cpu ? SYS.cpu.history : []);
+    const mp = SYS.memory ? SYS.memory.used / SYS.memory.total * 100 : null;
+    $('mem').innerHTML = fmt(mp, 0, '%'); setBar('memBar', mp, 75, 90); $('memTxt').textContent = SYS.memory ? gb(SYS.memory.used) + ' / ' + gb(SYS.memory.total) + ' GB' : '';
+    $('temp').innerHTML = fmt(SYS.temperatureC, 1, '°C'); setBar('tempBar', SYS.temperatureC == null ? null : SYS.temperatureC / 85 * 100, 82, 94);
+    const dp = SYS.disk ? SYS.disk.used / SYS.disk.total * 100 : null;
+    $('disk').innerHTML = SYS.disk ? gb(SYS.disk.used) + '<small>/ ' + gb(SYS.disk.total) + ' GB</small>' : '—'; setBar('diskBar', dp, 80, 92);
+    $('uptime').textContent = SYS.uptimeSec ? dur(SYS.uptimeSec) : '—';
+    $('load').textContent = SYS.load ? 'load ' + SYS.load.map((x) => x.toFixed(2)).join(' ') : '';
+    $('wifi').innerHTML = SYS.wifi ? SYS.wifi.signalDbm + '<small>dBm</small>' : '—';
+    $('ips').textContent = (SYS.addresses || []).map((a) => a.iface + ' ' + a.ip).join('\n');
+  }
+}
+function drawSpark(h) {
+  const svg = $('cpuSpark'); if (!h || h.length < 2) { svg.innerHTML = ''; return; }
+  const n = h.length, x = (i) => i / (n - 1) * 120, y = (v) => 32 - Math.min(100, v) / 100 * 30;
+  const pts = h.map((v, i) => x(i).toFixed(1) + ',' + y(v).toFixed(1)).join(' ');
+  svg.innerHTML = '<line x1="0" x2="120" y1="17" y2="17" stroke="var(--line)" stroke-width="1" vector-effect="non-scaling-stroke"/>' +
+    '<polygon points="0,34 ' + pts + ' 120,34" fill="var(--accent)" fill-opacity=".14"/>' +
+    '<polyline points="' + pts + '" fill="none" stroke="var(--accent)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>';
+}
+function renderLog() {
+  const fmtT = (ts) => new Date(ts).toLocaleTimeString([], { hour12: false });
+  $('log').innerHTML = T.log.length ? T.log.map((e) => {
+    const s = e.sev <= 3 ? 'crit' : e.sev === 4 ? 'warn' : 'info';
+    return '<li><span class="t">' + fmtT(e.ts) + '</span><span data-s="' + s + '">' + SEV[e.sev] + '</span><span>' + e.text.replace(/[<&]/g, (c) => c === '<' ? '&lt;' : '&amp;') + '</span></li>';
+  }).join('') : '<li><span class="t">—</span><span></span><span class="t">No messages from the flight controller yet</span></li>';
+}
+$('clearLog').onclick = () => { T.log = []; renderLog(); };
+
+// attitude indicator
+const adi = $('adi'), ax = adi.getContext('2d');
+function drawAdi() {
+  const css = getComputedStyle(document.documentElement), c = (n) => css.getPropertyValue(n).trim();
+  const W = 300, R = 140, r = T.roll || 0, p = deg(T.pitch) || 0;
+  ax.clearRect(0, 0, W, W); ax.save(); ax.translate(150, 150);
+  ax.beginPath(); ax.arc(0, 0, R, 0, Math.PI * 2); ax.clip();
+  ax.rotate(-r); const off = p * 3.2;
+  ax.fillStyle = c('--sky'); ax.fillRect(-300, -600 + off, 600, 600);
+  ax.fillStyle = c('--ground'); ax.fillRect(-300, off, 600, 600);
+  ax.strokeStyle = '#ffffff'; ax.fillStyle = '#ffffff'; ax.lineWidth = 2; ax.font = '500 15px ' + c('--f-mono');
+  ax.beginPath(); ax.moveTo(-300, off); ax.lineTo(300, off); ax.stroke();
+  for (let d = -30; d <= 30; d += 10) { if (!d) continue; const y = off - d * 3.2, w = 34;
+    ax.beginPath(); ax.moveTo(-w, y); ax.lineTo(w, y); ax.stroke(); ax.fillText(Math.abs(d), w + 6, y + 5); }
+  ax.restore();
+  ax.save(); ax.translate(150, 150);
+  ax.strokeStyle = c('--line'); ax.lineWidth = 4; ax.beginPath(); ax.arc(0, 0, R, 0, Math.PI * 2); ax.stroke();
+  ax.strokeStyle = '#f4b400'; ax.lineWidth = 5; ax.lineCap = 'round';
+  ax.beginPath(); ax.moveTo(-70, 0); ax.lineTo(-24, 0); ax.lineTo(-12, 12); ax.moveTo(70, 0); ax.lineTo(24, 0); ax.lineTo(12, 12); ax.stroke();
+  ax.fillStyle = '#f4b400'; ax.beginPath(); ax.arc(0, 0, 4, 0, Math.PI * 2); ax.fill();
+  ax.restore();
+}
+
+// camera
+let camOff = null, frames = 0;
+function startCam() {
+  if (camOff) return; $('camTopic').textContent = cfg.camTopic;
+  camOff = ros.subscribe(cfg.camTopic, 'sensor_msgs/msg/CompressedImage', (m) => {
+    frames++; const img = $('camImg');
+    img.src = 'data:image/' + (m.format && m.format.includes('png') ? 'png' : 'jpeg') + ';base64,' + m.data;
+    img.hidden = false; $('camEmpty').hidden = true;
+  }, 100);
+}
+function stopCam() { if (camOff) { camOff(); camOff = null; } }
+setInterval(() => { $('camFps').textContent = frames + ' fps'; frames = 0; }, 1000);
+
+// ---------------- servos ----------------
+const sState = cfg.servos.map(() => ({ busy: false, dirty: false, s: '', msg: '' }));
+const pw = (s, a) => Math.round(s.min + (s.max - s.min) * a / 180);
+function servoRow(s, i) {
+  return '<div class="servo" id="srv' + i + '">' +
+    '<div class="name"><b id="sn' + i + '"></b><span id="sc' + i + '"></span></div>' +
+    '<div><input type="range" min="0" max="180" step="1" id="sr' + i + '" aria-label="Servo ' + (i + 1) + ' angle"><div class="scale"><span>0</span><span>45</span><span>90</span><span>135</span><span>180</span></div></div>' +
+    '<input class="angle" type="number" min="0" max="180" id="sv' + i + '" aria-label="Servo ' + (i + 1) + ' angle value">' +
+    '<div class="quick"><button class="btn" data-a="0" data-i="' + i + '">0°</button><button class="btn" data-a="90" data-i="' + i + '">90°</button><button class="btn" data-a="180" data-i="' + i + '">180°</button><span class="status-dot" id="sd' + i + '" title=""></span></div>' +
+    '<div class="meta"><span id="sp' + i + '"></span><label><input type="checkbox" id="sl' + i + '"> Follows “All servos”</label><label><input type="checkbox" id="si' + i + '"> Reverse</label></div></div>';
+}
+$('servoList').innerHTML = cfg.servos.map(servoRow).join('');
+function paintServo(i) {
+  const s = cfg.servos[i], st = sState[i];
+  $('sn' + i).textContent = s.name; $('sc' + i).textContent = 'ch ' + s.ch;
+  const r = $('sr' + i); r.value = s.angle; r.style.setProperty('--p', s.angle / 180 * 100 + '%');
+  if (document.activeElement !== $('sv' + i)) $('sv' + i).value = s.angle;
+  $('sp' + i).textContent = pw(s, s.invert ? 180 - s.angle : s.angle) + ' µs';
+  $('sl' + i).checked = s.linked; $('si' + i).checked = s.invert;
+  const d = $('sd' + i); setS(d, st.s); d.title = st.msg || '';
+}
+function sendServo(i) {
+  const s = cfg.servos[i], st = sState[i];
+  if (st.busy) { st.dirty = true; return; }
+  st.busy = true; st.dirty = false; st.s = 'busy'; paintServo(i);
+  const a = s.invert ? 180 - s.angle : s.angle;
+  ros.call('/dexi/servo_control', 'dexi_interfaces/srv/ServoControl', { pin: s.ch, angle: Math.round(a), min_pw: s.min, max_pw: s.max })
+    .then((r) => { st.s = r.success ? 'ok' : 'crit'; st.msg = r.message || ''; if (!r.success) toast(s.name + ': ' + r.message); })
+    .catch((e) => { st.s = 'crit'; st.msg = e.message; toast(s.name + ': ' + e.message); })
+    .finally(() => { st.busy = false; paintServo(i); if (st.dirty) setTimeout(() => sendServo(i), 30); });
+}
+function setAngle(i, a) { const s = cfg.servos[i]; s.angle = Math.max(0, Math.min(180, Math.round(+a || 0))); paintServo(i); sendServo(i); save(); }
+cfg.servos.forEach((s, i) => {
+  $('sr' + i).addEventListener('input', (e) => setAngle(i, e.target.value));
+  $('sv' + i).addEventListener('change', (e) => setAngle(i, e.target.value));
+  $('sl' + i).addEventListener('change', (e) => { s.linked = e.target.checked; save(); });
+  $('si' + i).addEventListener('change', (e) => { s.invert = e.target.checked; paintServo(i); sendServo(i); save(); });
+  paintServo(i);
+});
+$('servoList').addEventListener('click', (e) => { const b = e.target.closest('button[data-a]'); if (b) setAngle(+b.dataset.i, +b.dataset.a); });
+function setMaster(a) {
+  a = Math.max(0, Math.min(180, Math.round(+a || 0)));
+  const r = $('masterRange'); r.value = a; r.style.setProperty('--p', a / 180 * 100 + '%'); $('masterNum').value = a;
+  cfg.servos.forEach((s, i) => { if (s.linked) setAngle(i, a); });
+}
+$('masterRange').addEventListener('input', (e) => setMaster(e.target.value));
+$('masterNum').addEventListener('change', (e) => setMaster(e.target.value));
+$('masterRange').style.setProperty('--p', '50%');
+$('centerAll').onclick = () => { setMaster(90); cfg.servos.forEach((s, i) => setAngle(i, 90)); };
+let sweeping = null;
+$('sweep').onclick = () => {
+  if (sweeping) { cancelAnimationFrame(sweeping); sweeping = null; $('sweep').textContent = 'Sweep test'; return; }
+  $('sweep').textContent = 'Stop sweep'; const t0 = performance.now();
+  const step = (t) => {
+    const k = (t - t0) / 4000; if (k >= 1) { setMaster(90); sweeping = null; $('sweep').textContent = 'Sweep test'; return; }
+    setMaster(90 - 90 * Math.sin(k * Math.PI * 2)); sweeping = requestAnimationFrame(step);
+  };
+  sweeping = requestAnimationFrame(step);
+};
+// servo setup table
+cfg.servos.forEach((s, i) => {
+  const row = document.createElement('div'); row.className = 'srow';
+  row.innerHTML = '<input id="ssN' + i + '" aria-label="Servo ' + (i + 1) + ' name"><input id="ssC' + i + '" type="number" min="0" max="15" aria-label="Channel"><input id="ssMin' + i + '" type="number" min="400" max="1500" step="10" aria-label="Min pulse"><input id="ssMax' + i + '" type="number" min="1500" max="2600" step="10" aria-label="Max pulse">';
+  $('servoSettings').appendChild(row);
+  const bind = (id, key, num) => { const el = $(id); el.value = s[key]; el.addEventListener('change', () => { s[key] = num ? +el.value : el.value; paintServo(i); save(); }); };
+  bind('ssN' + i, 'name'); bind('ssC' + i, 'ch', 1); bind('ssMin' + i, 'min', 1); bind('ssMax' + i, 'max', 1);
+});
+
+// ---------------- GPIO ----------------
+const pState = cfg.pins.map(() => ({ value: false, changed: 0, s: '' }));
+let pinSubs = [];
+function renderPins() {
+  $('pinList').innerHTML = cfg.pins.map((p, i) => {
+    const st = pState[i], out = p.mode === 'out';
+    return '<div class="pin"><div class="led" id="pl' + i + '" data-on="' + (st.value ? 1 : 0) + '"></div>' +
+      '<div class="info"><b>' + p.name.replace(/</g, '&lt;') + '</b><span>P' + p.pin + ' · ' + (out ? 'output' : 'input') + ' · <span id="pt' + i + '">' + (st.value ? 'HIGH' : 'LOW') + '</span></span></div>' +
+      '<div class="acts">' + (out
+        ? '<button class="btn" data-pulse="' + i + '">Pulse</button><button class="switch" data-tog="' + i + '" aria-pressed="' + st.value + '">' + (st.value ? 'HIGH' : 'LOW') + '</button>'
+        : '<span class="chip" id="pa' + i + '">Read only</span>') + '</div></div>';
+  }).join('');
+}
+function paintPin(i) {
+  const st = pState[i]; const led = $('pl' + i); if (!led) return;
+  led.dataset.on = st.value ? 1 : 0; $('pt' + i).textContent = st.value ? 'HIGH' : 'LOW';
+  const sw = document.querySelector('[data-tog="' + i + '"]'); if (sw) { sw.setAttribute('aria-pressed', st.value); sw.textContent = st.value ? 'HIGH' : 'LOW'; }
+  const a = $('pa' + i); if (a && st.changed) { const s = Math.round((Date.now() - st.changed) / 1000); a.textContent = 'changed ' + (s < 60 ? s + 's' : Math.round(s / 60) + 'm') + ' ago'; }
+}
+function writePin(i, v) {
+  const p = cfg.pins[i];
+  return ros.call('/dexi/gpio_writer_service/write_gpio', 'dexi_interfaces/srv/GPIOSend', { pin: p.pin, state: v })
+    .then((r) => { if (r.success === false) throw new Error(r.message || 'write failed'); pState[i].value = v; paintPin(i); })
+    .catch((e) => toast(p.name + ': ' + e.message));
+}
+$('pinList').addEventListener('click', (e) => {
+  const t = e.target.closest('[data-tog]'); if (t) { const i = +t.dataset.tog; writePin(i, !pState[i].value); return; }
+  const pu = e.target.closest('[data-pulse]'); if (pu) { const i = +pu.dataset.pulse; writePin(i, true).then(() => setTimeout(() => writePin(i, false), 500)); }
+});
+$('allLow').onclick = () => cfg.pins.forEach((p, i) => { if (p.mode === 'out') writePin(i, false); });
+function syncInputs() {
+  pinSubs.forEach((f) => f()); pinSubs = [];
+  cfg.pins.forEach((p, i) => {
+    if (p.mode !== 'in') return;
+    pinSubs.push(ros.subscribe(cfg.gpioTopic.replace('{pin}', p.pin), 'std_msgs/msg/Bool', (m) => {
+      const st = pState[i]; if (st.value !== !!m.data || !st.changed) { st.value = !!m.data; st.changed = Date.now(); } paintPin(i);
+    }));
+  });
+}
+setInterval(() => cfg.pins.forEach((p, i) => { if (p.mode === 'in') paintPin(i); }), 1000);
+// pin setup
+cfg.pins.forEach((p, i) => {
+  const row = document.createElement('div'); row.className = 'srow'; row.style.gridTemplateColumns = 'minmax(90px,1.4fr) 58px 110px';
+  row.innerHTML = '<input id="psN' + i + '" aria-label="Pin ' + p.pin + ' name"><span class="mono label">P' + p.pin + '</span><select id="psM' + i + '" aria-label="Pin ' + p.pin + ' direction"><option value="out">Output</option><option value="in">Input</option></select>';
+  $('pinSettings').appendChild(row);
+  $('psN' + i).value = p.name; $('psM' + i).value = p.mode;
+  $('psN' + i).addEventListener('change', (e) => { p.name = e.target.value; renderPins(); save(); });
+  $('psM' + i).addEventListener('change', (e) => { p.mode = e.target.value; pState[i] = { value: false, changed: 0 }; renderPins(); syncInputs(); save(); });
+});
+$('gpioTopic').value = cfg.gpioTopic; $('gpioTopic').addEventListener('change', (e) => { cfg.gpioTopic = e.target.value; syncInputs(); save(); });
+$('camTopicIn').value = cfg.camTopic; $('camTopicIn').addEventListener('change', (e) => { cfg.camTopic = e.target.value; stopCam(); if (cfg.tab === 'monitor') startCam(); save(); });
+renderPins();
+
+// ---------------- tabs + loops ----------------
+function showTab(tab) {
+  if (location.hash !== '#embed') { cfg.tab = tab; save(); }
+  document.querySelectorAll('.tab').forEach((b) => b.setAttribute('aria-selected', b.dataset.tab === tab));
+  $('view-monitor').hidden = tab !== 'monitor'; $('view-servos').hidden = tab !== 'servos';
+  tab === 'monitor' ? startCam() : stopCam(); // no point pulling video while on the servo view
+}
+document.querySelectorAll('.tab').forEach((b) => b.addEventListener('click', () => showTab(b.dataset.tab)));
+const EMBED = location.hash === '#embed';
+if (EMBED) document.body.classList.add('embed');
+showTab(EMBED ? 'monitor' : location.hash === '#servos' ? 'servos' : (cfg.tab || 'monitor'));
+syncInputs(); renderLog();
+setInterval(renderMonitor, 250); renderMonitor();
+(function frame() { if (!$('view-monitor').hidden) drawAdi(); requestAnimationFrame(frame); })();
+})();
+</script>
